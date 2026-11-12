@@ -1,14 +1,19 @@
-# 🚀 Evolution Explorer
+# 🧬 EVOLUTION — Living Terrain
 
 **Fly through pillars grown by Conway's Game of Life.**
 
-Pillar height = how long its cells have lived. Old pillars **explode** — and so do stagnant, repeating patterns. Dodge, collect DNA, survive.
+Pillar height = how long cells have lived + terrain memory. Cells **explode at age 65** — and stagnant, repeating patterns detonate too.
 
-![Web](https://img.shields.io/badge/Web-Play%20now-22d3ee) ![Godot](https://img.shields.io/badge/Godot-4.x-478cbf) ![Three.js](https://img.shields.io/badge/Three.js-r160-e879f9)
+![Godot](https://img.shields.io/badge/Godot-4.7-478cbf) ![Web](https://img.shields.io/badge/Web-Play%20now-22d3ee) ![Three.js](https://img.shields.io/badge/Three.js-r160-e879f9)
 
 ---
 
 ## ▶️ Play it
+
+### Godot version (original)
+
+1. Open [Godot 4.x](https://godotengine.org/download), **Import** this folder (`project.godot` at the root).
+2. Press **F5** (run main scene — `main.tscn` → `main.gd`).
 
 ### Web version (instant, no install)
 
@@ -20,68 +25,56 @@ python3 -m http.server 8000
 
 Or deploy to GitHub Pages: **Settings → Pages → Deploy from branch → `main` / `(root)`**. Single static site, no build step, works offline.
 
-### Godot version (native)
-
-1. Open [Godot 4.x](https://godotengine.org/download), **Import** this folder (`project.godot` at the root).
-2. Press **F5** (run main scene).
-
 ---
 
-## 🎮 How to play
+## 🎮 How it works
 
-You fly forward forever through an endless field of pillars. The pillars are alive — a Game of Life simulation runs in every chunk ahead of you:
+An 80×80 Conway B3/S23 world with **3 species** (cyan / magenta / green). Newborns inherit the majority species of their parents. Every live cell is a pillar:
 
-- 🟦 **Young cells → short pillars** (safe to fly over)
-- 🟧 **Old cells → tall pillars** (deadly — they reach your altitude)
-- 💥 **Cells explode at age 24** — watch white-hot pillars burst
-- ⚠️ **Stagnant / repeating patterns explode too** — if a chunk's Life repeats a previous state (still life or oscillator), everything older than 4 generations blows up. Bonus points!
-- 🧬 **Collect DNA orbs** and **skim pillars for near-miss bonuses** to build your combo
-- 🛡️ **Shield orbs** (gold) save you from one crash
-- ⚡ **Speed rises every 400 m** — boost with Shift for double score (and double danger)
+- 🟦 **Height = age** — `1.4 + 12·√(age/65) + 11·memory`, so pillars grow fast early, then level off
+- 👻 **Terrain memory** — dead cells leave ghost pillars that slowly fade, so the terrain remembers where life was (`M` toggles it)
+- 💥 **Age explosions** — cells detonate at age 65 with particle bursts
+- ⚠️ **Stagnation explosions** — an FNV hash history catches still lifes & oscillators (repeating states); everything older than 10 generations blows up
+- 🎨 **Paint new life** — unlock the mouse and click the ground to seed cells of any species
 
-| Action | Mouse | Touch | Keyboard |
-|---|---|---|---|
-| Steer ship | **Move mouse** | **Drag** | `WASD` / arrows |
-| Boost | — | ⚡ button | `Shift` (hold) |
-| Pause | ⏸ button | ⏸ button | `P` / `Esc` |
-| Sound | 🔊 button | 🔊 button | `M` |
-| Start / restart | Buttons | Buttons | `Enter` |
+## 🎮 Controls
 
-**Life rules** (choose on the start screen — each grows different pillar forests):
-- **Conway B3/S23** — the classic
-- **HighLife B36/S23** — denser, taller forests
-- **Day & Night B3678/S34678** — symmetric, explosive
-
----
-
-## ✨ Features
-
-- **Living obstacle course** — 5 Life chunks evolve ahead of you in real time; pillars grow, shrink, and explode as patterns live and die
-- **Age = height** — newborn cyan stubs → orange mid-life → magenta veterans → white-hot pillars about to burst
-- **Stagnation detection** — FNV hash history per chunk catches still lifes & oscillators and detonates them
-- **Game feel** — banking ship, chase camera with speed FOV, engine hum that rises with speed, explosion particles, near-miss whooshes, combo pitch-rising pickups
-- **Zero dependencies** — Three.js vendored in `lib/`; no CDN, no build step
+| Action | Key |
+|---|---|
+| Fly | `WASD` + mouse look |
+| Rise / fall | `Space` / `Ctrl` |
+| Boost | `Shift` |
+| Capture / release mouse | `Tab` (or click) |
+| Paint (left) / erase (right) | Click ground while mouse is released |
+| Brush species | `1` / `2` / `3` |
+| Overview | `V` |
+| Pause / step | `P` / `N` |
+| Randomize / clear | `R` / `C` |
+| Sim speed | `[` / `]` |
+| Height scale | `-` / `=` |
+| Terrain memory | `M` |
+| Explosions on/off | `X` |
 
 ## 📁 Project structure
 
 ```
 Evolution-Explorer/
+├── project.godot         # Godot 4 project ("EVOLUTION - Living Terrain")
+├── main.tscn             # Godot main scene (root)
+├── main.gd               # Godot game logic (original + explosions)
 ├── index.html            # Web game entry (GitHub Pages ready)
-├── css/style.css         # UI styling
-├── js/main.js            # Web game: Life chunks, flight, collision, audio
+├── css/style.css         # Web UI styling
+├── js/main.js            # Web game (mirrors main.gd + explosions)
 ├── lib/three.module.js   # Vendored Three.js r160 (offline-friendly)
-├── project.godot         # Godot 4 project
-├── icon.svg
-├── scenes/main.tscn      # Godot main scene
-└── scripts/main.gd       # Godot game logic (mirrors the web version)
+└── icon.svg
 ```
 
 ## 🔧 Tech notes
 
-- **Web:** vanilla JS + Three.js `InstancedMesh` (one draw call for all pillars), chunked Life simulation with per-chunk hash history, mouse-follow flight controls, WebAudio synth SFX.
-- **Godot:** GDScript + `MultiMeshInstance3D`, code-built UI, same chunk/Life design.
-- Collision is analytic (pillar footprint vs. ship position/altitude) — no physics engine needed.
+- **Godot:** GDScript + `MultiMeshInstance3D` (one draw call for 6,400 pillars), `CPUParticles3D` explosion bursts, code-built HUD. No addons, no external assets.
+- **Web:** vanilla JS + Three.js `InstancedMesh`, pointer-lock free-fly, raycast ground painting, WebAudio pops. Same simulation rules as `main.gd`.
+- Stagnation detection: FNV-1a hash of the cell grid, compared against the last 4 generations.
 
 ---
 
-*Built with 🚀 — go fly through something alive.*
+*Built with 🧬 — go fly through something alive.*

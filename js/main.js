@@ -1,181 +1,107 @@
 /* ════════════════════════════════════════════════════════════════
-   EVOLUTION EXPLORER — Fly Through Living Pillars
-   Pillars grown by Conway's Game of Life.
-   Height = how long cells have lived. Old pillars explode.
-   Stagnant / repeating patterns explode too.
+   EVOLUTION — Living Terrain (web version)
+   Conway B3/S23, 3 species, age-height + terrain memory.
+   Cells explode at MAX_AGE; stagnant/repeating patterns detonate.
+   Free-fly camera with pointer-lock mouse look + ground painting.
+   Mirrors the Godot original (main.gd) + explosion systems.
    ════════════════════════════════════════════════════════════════ */
 import * as THREE from 'three';
 
 /* ─────────────────────────── CONFIG ─────────────────────────── */
-const W = 24;                 // Life grid width (pillars across)
-const CHUNK_D = 14;           // rows per chunk
-const N_CHUNKS = 5;           // active chunks
-const SPACING = 2.2;          // metres between pillars
-const MAX_AGE = 24;           // cells explode at this age
-const BASE_H = 1.2, H_PER_AGE = 0.42;
-const LIFE_INTERVAL = 0.55;   // seconds per Life generation (per chunk)
-const MAX_INSTANCES = W * CHUNK_D * N_CHUNKS;
-
-const RULES = {
-  classic:  { name: 'Conway B3/S23',          birth: [3],       survive: [2, 3] },
-  highlife: { name: 'HighLife B36/S23',       birth: [3, 6],    survive: [2, 3] },
-  daynight: { name: 'Day & Night B3678/S34678', birth: [3, 6, 7, 8], survive: [3, 4, 6, 7, 8] },
-};
-let ruleKey = 'classic';
-let birthSet = new Set(RULES.classic.birth), surviveSet = new Set(RULES.classic.survive);
+const GRID = 80, TOTAL = GRID * GRID, SPACING = 1.15;
+const MAX_AGE = 65, HISTORY_LIMIT = 1.0;
+const PALETTE = [new THREE.Color(0.15, 0.93, 1.0), new THREE.Color(1.0, 0.24, 0.72), new THREE.Color(0.54, 1.0, 0.38)];
+const ORANGE = new THREE.Color(1.0, 0.52, 0.26);
+const GHOST_A = new THREE.Color(0.06, 0.14, 0.26), GHOST_B = new THREE.Color(0.19, 0.26, 0.42);
 
 const $ = id => document.getElementById(id);
 const canvas = $('game-canvas');
-const els = {
-  score: $('stat-score'), dist: $('stat-dist'), dna: $('stat-dna'),
-  speed: $('stat-speed'), combo: $('stat-combo'), lifeInfo: $('life-info'),
-  hint: $('bottom-hint'), toasts: $('toasts'), warn: $('warn-banner'),
-  shield: $('shield-ind'),
-};
 
-/* ─────────────────────────── AUDIO ──────────────────────────── */
+/* ─────────────────────────── STATE ──────────────────────────── */
+let cells = new Uint8Array(TOTAL), nextCells = new Uint8Array(TOTAL);
+let ages = new Uint16Array(TOTAL), history = new Float32Array(TOTAL), heights = new Float32Array(TOTAL);
+let generations = 0, population = 0, running = true, memoryEnabled = true;
+let generationInterval = 0.22, heightScale = 1.0, accumulated = 0;
+let overview = false, mouseCaptured = false, brushSpecies = 1;
+let explosionsEnabled = true, explosions = 0;
+let hashHistory = [];
+let started = false;
+
+/* ─────────────────────────── AUDIO (light) ──────────────────── */
 const AudioSys = {
-  ctx: null, master: null, muted: false, engineOsc: null, engineGain: null, engineFilter: null,
+  ctx: null, master: null, muted: false,
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     try {
       this.ctx = new (window.AudioContext || window.webkitAudioContext)();
-      this.master = this.ctx.createGain(); this.master.gain.value = 0.5;
+      this.master = this.ctx.createGain(); this.master.gain.value = 0.4;
       this.master.connect(this.ctx.destination);
-      this.startEngine();
-    } catch (e) { /* no audio */ }
+    } catch (e) { }
   },
-  setMuted(m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 0.5; },
-  startEngine() {
-    if (!this.ctx || this.engineOsc) return;
-    this.engineFilter = this.ctx.createBiquadFilter(); this.engineFilter.type = 'lowpass'; this.engineFilter.frequency.value = 320;
-    this.engineGain = this.ctx.createGain(); this.engineGain.gain.value = 0.0;
-    this.engineOsc = this.ctx.createOscillator(); this.engineOsc.type = 'sawtooth'; this.engineOsc.frequency.value = 55;
-    this.engineOsc.connect(this.engineFilter); this.engineFilter.connect(this.engineGain); this.engineGain.connect(this.master);
-    this.engineOsc.start();
-  },
-  setEngine(speedNorm, on) {
-    if (!this.ctx || !this.engineOsc) return;
-    const t = this.ctx.currentTime;
-    this.engineOsc.frequency.setTargetAtTime(48 + speedNorm * 55, t, 0.1);
-    this.engineGain.gain.setTargetAtTime(on ? 0.045 + speedNorm * 0.03 : 0.0, t, 0.15);
-  },
-  tone(freq, dur, type = 'sine', vol = 0.15, slideTo = null, delay = 0) {
+  pop(big = false) {
     if (!this.ctx || this.muted) return;
-    const t = this.ctx.currentTime + delay;
+    const t = this.ctx.currentTime, dur = big ? 0.5 : 0.22;
     const o = this.ctx.createOscillator(), g = this.ctx.createGain();
-    o.type = type; o.frequency.setValueAtTime(freq, t);
-    if (slideTo) o.frequency.exponentialRampToValueAtTime(Math.max(30, slideTo), t + dur);
-    g.gain.setValueAtTime(vol, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.type = 'sine'; o.frequency.setValueAtTime(big ? 220 : 380, t);
+    o.frequency.exponentialRampToValueAtTime(60, t + dur);
+    g.gain.setValueAtTime(big ? 0.22 : 0.10, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.02);
   },
-  pickup(combo) { this.tone(520 + Math.min(combo, 12) * 55, 0.14, 'sine', 0.14, 900 + combo * 40); },
-  nearMiss() { this.tone(300, 0.18, 'triangle', 0.10, 900); },
-  explosion(big = false) {
-    if (!this.ctx || this.muted) return;
-    const t = this.ctx.currentTime, dur = big ? 0.8 : 0.4;
-    const buf = this.ctx.createBuffer(1, this.ctx.sampleRate * dur, this.ctx.sampleRate);
-    const d = buf.getChannelData(0); for (let i = 0; i < d.length; i++) d[i] = (Math.random() * 2 - 1) * (1 - i / d.length);
-    const src = this.ctx.createBufferSource(); src.buffer = buf;
-    const f = this.ctx.createBiquadFilter(); f.type = 'lowpass'; f.frequency.setValueAtTime(big ? 1200 : 800, t);
-    f.frequency.exponentialRampToValueAtTime(70, t + dur);
-    const g = this.ctx.createGain(); g.gain.setValueAtTime(big ? 0.5 : 0.28, t); g.gain.exponentialRampToValueAtTime(0.001, t + dur);
-    src.connect(f); f.connect(g); g.connect(this.master); src.start(t);
-    this.tone(big ? 110 : 90, dur * 0.8, 'sine', big ? 0.35 : 0.2, 32);
-  },
-  crash() { this.explosion(true); this.tone(400, 0.7, 'sawtooth', 0.2, 40); },
-  speedup() { [523, 659, 784].forEach((f, i) => this.tone(f, 0.16, 'sine', 0.12, null, i * 0.08)); },
-  shieldUp() { this.tone(880, 0.2, 'sine', 0.13); this.tone(1174, 0.3, 'sine', 0.13, null, 0.12); },
-  click() { this.tone(700, 0.05, 'square', 0.05, 500); },
+  setMuted(m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 0.4; },
 };
 
 /* ─────────────────────────── THREE SETUP ────────────────────── */
 const renderer = new THREE.WebGLRenderer({ canvas, antialias: true });
 renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
 renderer.toneMapping = THREE.ACESFilmicToneMapping;
-renderer.toneMappingExposure = 1.15;
+renderer.toneMappingExposure = 1.1;
 
 const scene = new THREE.Scene();
-scene.background = new THREE.Color(0x05060f);
-scene.fog = new THREE.FogExp2(0x05060f, 0.0085);
+scene.background = new THREE.Color(0.009, 0.014, 0.034);
+scene.fog = new THREE.FogExp2(0x05060f, 0.006);
 
-const camera = new THREE.PerspectiveCamera(62, 1, 0.1, 700);
-scene.add(new THREE.AmbientLight(0x8899ff, 0.55));
-const sun = new THREE.DirectionalLight(0xffffff, 1.3); sun.position.set(20, 40, -10); scene.add(sun);
-const pCyan = new THREE.PointLight(0x22d3ee, 700, 120, 1.6); scene.add(pCyan);
-const pMag = new THREE.PointLight(0xe879f9, 700, 120, 1.6); scene.add(pMag);
+const camera = new THREE.PerspectiveCamera(78, 1, 0.1, 650);
+camera.rotation.order = 'YXZ';
+camera.position.set(0, 16, 40);
+let yaw = 0, pitch = -0.30;
 
-/* Ground + grid (follow player) */
-const ground = new THREE.Mesh(
-  new THREE.PlaneGeometry(400, 500),
-  new THREE.MeshStandardMaterial({ color: 0x0a0d24, roughness: 1, metalness: 0 }));
-ground.rotation.x = -Math.PI / 2; scene.add(ground);
-const gridHelper = new THREE.GridHelper(400, 182, 0x22d3ee, 0x27335e);
-gridHelper.material.transparent = true; gridHelper.material.opacity = 0.32;
-gridHelper.position.y = 0.02; scene.add(gridHelper);
+scene.add(new THREE.AmbientLight(new THREE.Color(0.25, 0.33, 0.52), 1.4));
+const sun = new THREE.DirectionalLight(0xffffff, 1.6);
+sun.position.set(-30, 50, 20); scene.add(sun);
 
-/* Corridor walls (speed sensation) */
-for (const side of [-1, 1]) {
-  const wall = new THREE.Mesh(
-    new THREE.PlaneGeometry(500, 18),
-    new THREE.MeshBasicMaterial({ color: 0x22d3ee, transparent: true, opacity: 0.05, side: THREE.DoubleSide, depthWrite: false }));
-  wall.rotation.y = Math.PI / 2;
-  wall.position.set(side * 27.5, 9, 0);
-  wall.name = side < 0 ? 'wallL' : 'wallR';
-  scene.add(wall);
-}
+/* Floor */
+const floorMesh = new THREE.Mesh(
+  new THREE.BoxGeometry(GRID * SPACING + 2, 0.25, GRID * SPACING + 2),
+  new THREE.MeshStandardMaterial({ color: new THREE.Color(0.025, 0.045, 0.085), metalness: 0.5, roughness: 0.52 }));
+floorMesh.position.y = -0.20; scene.add(floorMesh);
 
-/* Stars (follow player) */
-const starGroup = new THREE.Group(); scene.add(starGroup);
+/* Stars */
 {
-  const N = 900, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
+  const N = 700, pos = new Float32Array(N * 3), col = new Float32Array(N * 3);
   const c = new THREE.Color();
   for (let i = 0; i < N; i++) {
-    pos[i * 3] = (Math.random() - 0.5) * 320;
-    pos[i * 3 + 1] = -8 + Math.random() * 80;
-    pos[i * 3 + 2] = -30 + Math.random() * 260;
+    pos[i * 3] = (Math.random() - 0.5) * 400; pos[i * 3 + 1] = Math.random() * 160; pos[i * 3 + 2] = (Math.random() - 0.5) * 400;
     c.setHSL(Math.random() < 0.3 ? 0.85 : 0.52, 0.8, 0.55 + Math.random() * 0.4);
     col[i * 3] = c.r; col[i * 3 + 1] = c.g; col[i * 3 + 2] = c.b;
   }
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  starGroup.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 1.1, vertexColors: true, transparent: true, opacity: 0.85, blending: THREE.AdditiveBlending, depthWrite: false })));
+  const stars = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.2, vertexColors: true, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
+  stars.position.set(0, 0, 0); scene.add(stars);
 }
 
-/* Pillars — one InstancedMesh for every chunk */
-const pillarGeo = new THREE.BoxGeometry(1.7, 1, 1.7);
-const pillarMat = new THREE.MeshStandardMaterial({ roughness: 0.32, metalness: 0.18 });
-const pillarsMesh = new THREE.InstancedMesh(pillarGeo, pillarMat, MAX_INSTANCES);
+/* Pillars */
+const pillarGeo = new THREE.BoxGeometry(0.91, 1, 0.91);
+const pillarMat = new THREE.MeshStandardMaterial({ roughness: 0.26, metalness: 0.18 });
+const pillarsMesh = new THREE.InstancedMesh(pillarGeo, pillarMat, TOTAL);
 pillarsMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
-pillarsMesh.count = 0; pillarsMesh.frustumCulled = false;
+pillarsMesh.frustumCulled = false;
 scene.add(pillarsMesh);
-{ const c = new THREE.Color(0xffffff); for (let i = 0; i < MAX_INSTANCES; i++) pillarsMesh.setColorAt(i, c); }
-
-/* Ship */
-const ship = new THREE.Group(); scene.add(ship);
-{
-  const bodyGeo = new THREE.ConeGeometry(0.55, 2.4, 6);
-  bodyGeo.rotateX(Math.PI / 2); // tip points +Z (forward)
-  const body = new THREE.Mesh(bodyGeo, new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x0e7490, emissiveIntensity: 0.9, roughness: 0.3, metalness: 0.6 }));
-  ship.add(body);
-  const wingGeo = new THREE.BoxGeometry(2.2, 0.12, 0.9);
-  const wings = new THREE.Mesh(wingGeo, new THREE.MeshStandardMaterial({ color: 0xe879f9, emissive: 0x86198f, emissiveIntensity: 0.7, roughness: 0.4, metalness: 0.5 }));
-  wings.position.z = -0.7; ship.add(wings);
-  const shipLight = new THREE.PointLight(0x22d3ee, 120, 34, 1.8);
-  shipLight.position.set(0, 0.5, -1); ship.add(shipLight);
-  // glow sprite
-  const cv = document.createElement('canvas'); cv.width = cv.height = 64;
-  const cx = cv.getContext('2d');
-  const grad = cx.createRadialGradient(32, 32, 2, 32, 32, 32);
-  grad.addColorStop(0, 'rgba(120,240,255,0.9)'); grad.addColorStop(0.4, 'rgba(34,211,238,0.35)'); grad.addColorStop(1, 'rgba(34,211,238,0)');
-  cx.fillStyle = grad; cx.fillRect(0, 0, 64, 64);
-  const glow = new THREE.Sprite(new THREE.SpriteMaterial({ map: new THREE.CanvasTexture(cv), blending: THREE.AdditiveBlending, depthWrite: false, transparent: true }));
-  glow.scale.set(3.2, 3.2, 1); ship.add(glow);
-}
+{ const c = new THREE.Color(0xffffff); for (let i = 0; i < TOTAL; i++) pillarsMesh.setColorAt(i, c); }
 
 /* Particles */
-const P_MAX = 1600;
+const P_MAX = 1800;
 const pPos = new Float32Array(P_MAX * 3), pCol = new Float32Array(P_MAX * 3);
 const pVel = new Float32Array(P_MAX * 3), pLife = new Float32Array(P_MAX), pMaxLife = new Float32Array(P_MAX);
 const pBaseCol = new Float32Array(P_MAX * 3);
@@ -183,12 +109,12 @@ let pCursor = 0;
 const pGeo = new THREE.BufferGeometry();
 pGeo.setAttribute('position', new THREE.BufferAttribute(pPos, 3));
 pGeo.setAttribute('color', new THREE.BufferAttribute(pCol, 3));
-const particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ size: 0.5, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
+const particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ size: 0.45, vertexColors: true, transparent: true, blending: THREE.AdditiveBlending, depthWrite: false }));
 particles.frustumCulled = false; scene.add(particles);
 for (let i = 0; i < P_MAX; i++) pPos[i * 3 + 1] = -9999;
 const _pc = new THREE.Color();
-function spawnParticles(wx, wy, wz, colorHex, count, speed = 5, life = 0.8) {
-  _pc.set(colorHex);
+function spawnParticles(wx, wy, wz, color, count, speed = 5, life = 0.8) {
+  _pc.copy(color);
   for (let n = 0; n < count; n++) {
     const i = pCursor; pCursor = (pCursor + 1) % P_MAX;
     pPos[i * 3] = wx; pPos[i * 3 + 1] = wy; pPos[i * 3 + 2] = wz;
@@ -210,476 +136,257 @@ function updateParticles(dt) {
   pGeo.attributes.position.needsUpdate = true;
   pGeo.attributes.color.needsUpdate = true;
 }
-
-/* DNA orbs */
-const orbs = [];
-{
-  const orbGeo = new THREE.SphereGeometry(0.55, 14, 14);
-  for (let i = 0; i < 24; i++) {
-    const m = new THREE.Mesh(orbGeo, new THREE.MeshStandardMaterial({ color: 0x22d3ee, emissive: 0x22d3ee, emissiveIntensity: 2.2, roughness: 0.2 }));
-    m.visible = false; scene.add(m);
-    orbs.push({ mesh: m, active: false, shield: false, phase: Math.random() * 6.28 });
-  }
-}
-function spawnOrb(shield = false) {
-  const o = orbs.find(o => !o.active); if (!o) return;
-  // find an empty-ish spot ahead
-  for (let tries = 0; tries < 12; tries++) {
-    const ch = chunks[Math.floor(Math.random() * chunks.length)];
-    if (!ch) return;
-    const gx = Math.floor(Math.random() * W), gz = Math.floor(Math.random() * CHUNK_D);
-    const wx = gx * SPACING - (W / 2) * SPACING + SPACING / 2;
-    const wz = ch.zStart + gz * SPACING + SPACING / 2;
-    if (wz < playerZ + 18 || wz > playerZ + 130) continue;
-    o.active = true; o.shield = shield;
-    o.mesh.visible = true;
-    o.mesh.material.color.set(shield ? 0xfbbf24 : 0x22d3ee);
-    o.mesh.material.emissive.set(shield ? 0xfbbf24 : 0x22d3ee);
-    o.mesh.position.set(wx, 2.5 + Math.random() * 7, wz);
-    o.baseY = o.mesh.position.y;
-    return;
-  }
+function cellWorldPos(i) {
+  const x = i % GRID, z = Math.floor(i / GRID);
+  return new THREE.Vector3((x - (GRID - 1) / 2) * SPACING, 4, (z - (GRID - 1) / 2) * SPACING);
 }
 
-/* ─────────────────────────── LIFE CHUNKS ────────────────────── */
-const PATTERNS_2D = {
-  glider: [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]],
-  acorn: [[1, 0], [3, 0], [0, 1], [3, 1], [4, 1], [5, 1], [6, 1]],
-  rpent: [[1, 0], [2, 0], [0, 1], [1, 1], [1, 2]],
-  lwss: [[1, 0], [3, 0], [0, 1], [4, 1], [0, 2], [1, 2], [2, 2], [3, 2]],
-};
-function makeChunk(zStart) {
-  const ch = {
-    zStart,
-    grid: new Uint8Array(W * CHUNK_D),
-    next: new Uint8Array(W * CHUNK_D),
-    age: new Uint16Array(W * CHUNK_D),
-    heights: new Float32Array(W * CHUNK_D),
-    targets: new Float32Array(W * CHUNK_D),
-    nearCd: new Float32Array(W * CHUNK_D),
-    gen: 0, pop: 0, oldest: 0, timer: Math.random() * LIFE_INTERVAL,
-    hashes: [],
-  };
-  seedChunk(ch);
-  return ch;
-}
-function seedChunk(ch) {
-  ch.grid.fill(0); ch.age.fill(0); ch.gen = 0; ch.hashes = [];
-  const density = 0.20 + Math.random() * 0.07;
-  for (let i = 0; i < ch.grid.length; i++) {
-    if (Math.random() < density) { ch.grid[i] = 1; ch.age[i] = Math.floor(Math.random() * 4); }
+/* ─────────────────────────── SIMULATION ─────────────────────── */
+const idxOf = (x, z) => z * GRID + x;
+function refreshPopulation() { let p = 0; for (let i = 0; i < TOTAL; i++) if (cells[i]) p++; population = p; }
+function seedWorld() {
+  cells.fill(0); ages.fill(0); history.fill(0); heights.fill(0);
+  for (let k = 0; k < 17; k++) {
+    const cx = 6 + Math.floor(Math.random() * (GRID - 12));
+    const cz = 6 + Math.floor(Math.random() * (GRID - 12));
+    const radius = 4 + Math.floor(Math.random() * 6);
+    const species = 1 + Math.floor(Math.random() * 3);
+    for (let z = Math.max(0, cz - radius); z <= Math.min(GRID - 1, cz + radius); z++)
+      for (let x = Math.max(0, cx - radius); x <= Math.min(GRID - 1, cx + radius); x++) {
+        if (Math.hypot(x - cx, z - cz) < radius && Math.random() < 0.37) cells[idxOf(x, z)] = species;
+      }
   }
-  // stamp 1-2 patterns for interesting structures
-  const keys = Object.keys(PATTERNS_2D);
-  const nPat = 1 + Math.floor(Math.random() * 2);
-  for (let p = 0; p < nPat; p++) {
-    const pat = PATTERNS_2D[keys[Math.floor(Math.random() * keys.length)]];
-    const ox = 2 + Math.floor(Math.random() * (W - 9)), oz = 2 + Math.floor(Math.random() * (CHUNK_D - 5));
-    for (const [px, pz] of pat) {
-      const x = (ox + px) % W, z = oz + pz;
-      if (z < CHUNK_D) { const i = z * W + x; ch.grid[i] = 1; ch.age[i] = 0; }
-    }
-  }
-  refreshTargets(ch);
-  ch.heights.set(ch.targets); // new chunks appear at full height (far away, fogged)
-  recountChunk(ch);
+  generations = 0; explosions = 0; hashHistory = [];
+  refreshPopulation();
 }
-function refreshTargets(ch) {
-  for (let i = 0; i < ch.grid.length; i++) {
-    ch.targets[i] = ch.grid[i] ? BASE_H + ch.age[i] * H_PER_AGE : 0;
-  }
-}
-function recountChunk(ch) {
-  let pop = 0, oldest = 0;
-  for (let i = 0; i < ch.grid.length; i++) if (ch.grid[i]) { pop++; if (ch.age[i] > oldest) oldest = ch.age[i]; }
-  ch.pop = pop; ch.oldest = oldest;
-}
-function hashGrid(grid) {
+function hashCells() {
   let h = 2166136261;
-  for (let i = 0; i < grid.length; i++) { h ^= grid[i]; h = Math.imul(h, 16777619); }
+  for (let i = 0; i < TOTAL; i++) { h ^= cells[i]; h = Math.imul(h, 16777619); }
   return h >>> 0;
 }
-function cellWorld(ch, gx, gz) {
-  return { x: gx * SPACING - (W / 2) * SPACING + SPACING / 2, z: ch.zStart + gz * SPACING + SPACING / 2 };
-}
-function explodeCell(ch, gx, gz, big = false) {
-  const i = gz * W + gx;
-  ch.grid[i] = 0; ch.age[i] = 0; ch.targets[i] = 0;
-  const w = cellWorld(ch, gx, gz);
-  spawnParticles(w.x, BASE_H + ch.heights[i] * 0.5, w.z, ch.age[i] >= MAX_AGE - 3 ? 0xffffff : 0xe879f9, big ? 10 : 5, big ? 7 : 4.5, 0.8);
-}
-function stepLife(ch) {
-  const { grid, next, age } = ch;
-  let explosions = 0;
-  for (let gz = 0; gz < CHUNK_D; gz++) for (let gx = 0; gx < W; gx++) {
-    const i = gz * W + gx;
-    let n = 0;
+function stepSimulation() {
+  for (let z = 0; z < GRID; z++) for (let x = 0; x < GRID; x++) {
+    const i = idxOf(x, z);
+    let neighbours = 0; const votes = [0, 0, 0];
     for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
       if (!dx && !dz) continue;
-      const nx = (gx + dx + W) % W, nz = gz + dz;
-      if (nz < 0 || nz >= CHUNK_D) continue;
-      if (grid[nz * W + nx]) n++;
+      const nx = x + dx, nz = z + dz;
+      if (nx < 0 || nx >= GRID || nz < 0 || nz >= GRID) continue;
+      const nb = cells[idxOf(nx, nz)];
+      if (nb > 0) { neighbours++; votes[nb - 1]++; }
     }
-    const alive = grid[i];
-    next[i] = alive ? (surviveSet.has(n) ? 1 : 0) : (birthSet.has(n) ? 1 : 0);
+    const living = cells[i];
+    if (living !== 0 && (neighbours === 2 || neighbours === 3)) nextCells[i] = living;
+    else if (living === 0 && neighbours === 3) {
+      let winner = 0;
+      for (let s = 1; s < 3; s++) if (votes[s] > votes[winner]) winner = s;
+      nextCells[i] = winner + 1;
+    } else nextCells[i] = 0;
   }
-  // apply + ages + age-explosions
-  for (let gz = 0; gz < CHUNK_D; gz++) for (let gx = 0; gx < W; gx++) {
-    const i = gz * W + gx;
-    if (next[i]) {
-      if (!grid[i]) age[i] = 0; else age[i]++;
-      if (age[i] >= MAX_AGE) { next[i] = 0; explosions++; }
-    } else age[i] = 0;
+  for (let i = 0; i < TOTAL; i++) {
+    const old = cells[i], current = nextCells[i];
+    cells[i] = current;
+    if (current !== 0) {
+      ages[i] = old !== 0 ? Math.min(MAX_AGE, ages[i] + 1) : 1;
+      history[i] = Math.min(HISTORY_LIMIT, history[i] + 0.065);
+    } else {
+      ages[i] = 0;
+      history[i] = Math.max(0, history[i] - 0.012);
+    }
   }
-  // swap
-  const tmp = ch.grid; ch.grid = ch.next; ch.next = tmp;
-  ch.gen++;
-  refreshTargets(ch);
-  recountChunk(ch);
-
+  generations++;
+  /* Age explosions */
+  if (explosionsEnabled) {
+    let bursts = 0;
+    for (let i = 0; i < TOTAL; i++) {
+      if (cells[i] !== 0 && ages[i] >= MAX_AGE) {
+        cells[i] = 0; ages[i] = 0; explosions++;
+        if (bursts < 10) { const p = cellWorldPos(i); spawnParticles(p.x, p.y, p.z, new THREE.Color(1.0, 0.85, 0.4), 14, 5, 0.8); bursts++; }
+      }
+    }
+    if (bursts > 0) AudioSys.pop(false);
+  }
   /* Stagnation / repeat detection */
-  const h = hashGrid(ch.grid);
-  const repeated = ch.hashes.includes(h);
-  ch.hashes.push(h); if (ch.hashes.length > 4) ch.hashes.shift();
-  if (repeated && ch.gen > 6 && ch.pop > 8) {
-    // stagnant or oscillating pattern: everything older than 4 explodes
-    let count = 0;
-    for (let gz = 0; gz < CHUNK_D; gz++) for (let gx = 0; gx < W; gx++) {
-      const i = gz * W + gx;
-      if (ch.grid[i] && ch.age[i] >= 4) { explodeCell(ch, gx, gz, true); count++; }
+  const h = hashCells();
+  const repeated = hashHistory.includes(h);
+  hashHistory.push(h); if (hashHistory.length > 4) hashHistory.shift();
+  if (repeated && generations > 10 && population > 20 && explosionsEnabled) {
+    let count = 0, bursts = 0;
+    for (let i = 0; i < TOTAL; i++) {
+      if (cells[i] !== 0 && ages[i] >= 10) {
+        cells[i] = 0; ages[i] = 0; explosions++; count++;
+        if (bursts < 14) { const p = cellWorldPos(i); spawnParticles(p.x, p.y, p.z, new THREE.Color(1.0, 0.24, 0.72), 16, 6, 0.9); bursts++; }
+      }
     }
     if (count > 0) {
-      refreshTargets(ch); recountChunk(ch);
-      bonusScore += Math.min(200, count * 10);
       showWarn();
-      AudioSys.explosion(false);
-      if (state === 'playing') toast(`💥 <b>Stagnation!</b> ${count} pillars exploded — pattern was repeating.`, false, 3200);
+      AudioSys.pop(true);
+      toast(`💥 <b>Stagnation!</b> ${count} pillars exploded — pattern was repeating.`, 3200);
     }
-    ch.hashes = [];
+    hashHistory = [];
   }
-  /* Extinct chunk? Reseed so the world never goes empty */
-  if (ch.pop === 0) seedChunk(ch);
+  refreshPopulation();
 }
 
-/* Age-explosion particles need the dying positions: patch stepLife by wrapping.
-   We re-implement the age-death particle spawn by tracking deaths in stepLife2. */
-const _origStep = stepLife;
-// (stepLife above already handles logic; particles for age deaths are added here via a lightweight wrapper)
-function stepLifeWithFx(ch) {
-  // snapshot old ages/heights to find age deaths after step
-  const before = new Uint8Array(ch.grid);
-  const beforeAge = new Uint16Array(ch.age);
-  _origStep(ch);
-  // find cells that were alive+old before and are dead now with age>=MAX_AGE-1 before
-  let fx = 0;
-  for (let gz = 0; gz < CHUNK_D && fx < 10; gz++) for (let gx = 0; gx < W && fx < 10; gx++) {
-    const i = gz * W + gx;
-    if (before[i] && beforeAge[i] >= MAX_AGE - 1 && !ch.grid[i]) {
-      const w = cellWorld(ch, gx, gz);
-      spawnParticles(w.x, BASE_H + beforeAge[i] * H_PER_AGE * 0.5, w.z, 0xffffff, 6, 5, 0.8);
-      fx++;
-    }
-  }
-  if (fx > 0) { bonusScore += fx * 10; if (fx >= 3) AudioSys.explosion(false); }
-}
-
-/* ─────────────────────────── GAME STATE ─────────────────────── */
-let state = 'menu'; // menu | playing | paused | gameover
-let chunks = [];
-let playerZ = 0, shipX = 0, shipY = 6, targetX = 0, targetY = 6;
-let speed = 12, baseSpeed = 14, distance = 0, score = 0, bonusScore = 0;
-let dna = 0, combo = 0, comboTimer = 0, shield = false, invuln = 0;
-let shake = 0, boostHeld = false, nextShieldAt = 700, lastSpeedLevel = 0;
-let best = 0; try { best = +localStorage.getItem('ee_best') || 0; } catch (e) { }
-if (best > 0) $('best-line').textContent = `🏆 Best score: ${best.toLocaleString()}`;
-
-function resetWorld() {
-  chunks = [];
-  let z = -28;
-  for (let i = 0; i < N_CHUNKS; i++) { chunks.push(makeChunk(z)); z += CHUNK_D * SPACING; }
-  playerZ = 0; shipX = 0; shipY = 6; targetX = 0; targetY = 6;
-  distance = 0; bonusScore = 0; dna = 0; combo = 0; comboTimer = 0;
-  shield = false; invuln = 0; shake = 0; nextShieldAt = 700; lastSpeedLevel = 0;
-  baseSpeed = 14; speed = 12;
-  for (const o of orbs) { o.active = false; o.mesh.visible = false; }
-  ship.visible = true;
-  els.shield.classList.add('hidden');
-}
-function updateChunks() {
-  // remove behind, add ahead
-  while (chunks.length && chunks[0].zStart + CHUNK_D * SPACING < playerZ - 30) chunks.shift();
-  while (chunks.length < N_CHUNKS) {
-    const last = chunks[chunks.length - 1];
-    chunks.push(makeChunk(last.zStart + CHUNK_D * SPACING));
-  }
-  for (const ch of chunks) {
-    ch.timer += lastDt;
-    if (ch.timer >= LIFE_INTERVAL) { ch.timer = 0; stepLifeWithFx(ch); }
-  }
-}
-
-/* ─────────────────────────── RENDERING ──────────────────────── */
+/* ─────────────────────────── VISUALS ────────────────────────── */
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _c = new THREE.Color();
-function ageColor(a, out, now) {
-  if (a >= MAX_AGE - 3) { // white-hot, about to explode (pulsing)
-    const pulse = 0.75 + 0.25 * Math.sin(now * 10 + a);
-    out.setHSL(0.0, 0.3, 0.85 * pulse + 0.1);
-  } else if (a === 0) out.setHSL(0.52, 1.0, 0.72);
-  else if (a === 1) out.setHSL(0.46, 0.95, 0.60);
-  else if (a <= 3) out.setHSL(0.30, 0.9, 0.55);
-  else if (a <= 7) out.setHSL(0.10, 0.95, 0.55);
-  else if (a <= 14) out.setHSL(0.86, 0.9, 0.60);
-  else out.setHSL(0.74, 0.85, 0.66);
-  return out;
-}
-function renderPillars(dt, now) {
-  let n = 0;
-  const growK = Math.min(1, dt * 5.5);
-  for (const ch of chunks) {
-    for (let gz = 0; gz < CHUNK_D; gz++) for (let gx = 0; gx < W; gx++) {
-      const i = gz * W + gx;
-      ch.heights[i] += (ch.targets[i] - ch.heights[i]) * growK;
-      const h = ch.heights[i];
-      if (h < 0.06) continue;
-      const w = cellWorld(ch, gx, gz);
-      _p.set(w.x, h / 2, w.z); _s.set(1, h, 1);
-      _m.compose(_p, _q, _s);
-      pillarsMesh.setMatrixAt(n, _m);
-      ageColor(ch.age[i], _c, now);
-      pillarsMesh.setColorAt(n, _c);
-      n++;
-    }
+function updateVisuals(dt) {
+  const k = Math.min(1, dt * 5.5);
+  for (let z = 0; z < GRID; z++) for (let x = 0; x < GRID; x++) {
+    const i = idxOf(x, z);
+    const living = cells[i];
+    const ageFactor = ages[i] / MAX_AGE;
+    const mem = memoryEnabled ? history[i] : 0;
+    const target = living !== 0
+      ? (1.4 + 12.0 * Math.sqrt(ageFactor) + 11.0 * mem) * heightScale
+      : (8.0 * mem * heightScale);
+    heights[i] += (target - heights[i]) * k;
+    const h = Math.max(0.025, heights[i]);
+    _p.set((x - (GRID - 1) / 2) * SPACING, h * 0.5, (z - (GRID - 1) / 2) * SPACING);
+    _s.set(1, h, 1);
+    _m.compose(_p, _q, _s);
+    pillarsMesh.setMatrixAt(i, _m);
+    if (living > 0) _c.copy(PALETTE[living - 1]).lerp(ORANGE, ageFactor * 0.55);
+    else _c.copy(GHOST_A).lerp(GHOST_B, mem);
+    pillarsMesh.setColorAt(i, _c);
   }
-  pillarsMesh.count = n;
   pillarsMesh.instanceMatrix.needsUpdate = true;
   if (pillarsMesh.instanceColor) pillarsMesh.instanceColor.needsUpdate = true;
 }
-function updateShipAndCamera(dt, now) {
-  // ship follows target with banking
-  const prevX = shipX, prevY = shipY;
-  const k = 1 - Math.pow(0.0005, dt);
-  shipX += (targetX - shipX) * k;
-  shipY += (targetY - shipY) * k;
-  ship.position.set(shipX, shipY, playerZ);
-  const vx = (shipX - prevX) / Math.max(dt, 0.001), vy = (shipY - prevY) / Math.max(dt, 0.001);
-  ship.rotation.z = THREE.MathUtils.clamp(-vx * 0.028, -0.7, 0.7);
-  ship.rotation.x = THREE.MathUtils.clamp(vy * 0.02, -0.45, 0.45);
-  // engine trail
-  if (state === 'playing' || state === 'menu') {
-    spawnParticles(shipX, shipY, playerZ - 1.2, 0x22d3ee, 1, 0.6, 0.45);
-  }
-  // camera chase
-  const camK = 1 - Math.pow(0.001, dt);
-  camera.position.x += (shipX * 0.62 - camera.position.x) * camK;
-  camera.position.y += (shipY + 3.4 - camera.position.y) * camK;
-  camera.position.z += (playerZ - 9.5 - camera.position.z) * camK;
-  if (shake > 0.01) {
-    camera.position.x += (Math.random() - 0.5) * shake;
-    camera.position.y += (Math.random() - 0.5) * shake;
-    shake *= Math.pow(0.001, dt);
-  }
-  camera.lookAt(shipX * 0.85, shipY + 0.4, playerZ + 14);
-  const targetFov = 62 + (speed - 14) * 0.5 + (boostHeld && state === 'playing' ? 9 : 0);
-  if (Math.abs(camera.fov - targetFov) > 0.1) { camera.fov += (targetFov - camera.fov) * Math.min(1, dt * 4); camera.updateProjectionMatrix(); }
-  // followers
-  ground.position.z = playerZ + 90;
-  gridHelper.position.z = Math.round(playerZ / SPACING) * SPACING + 60;
-  starGroup.position.z = playerZ;
-  for (const nm of ['wallL', 'wallR']) { const w = scene.getObjectByName(nm); if (w) w.position.z = playerZ + 90; }
-  const t = now * 0.22;
-  pCyan.position.set(shipX + Math.cos(t) * 26, 12, playerZ + 30 + Math.sin(t) * 26);
-  pMag.position.set(shipX + Math.cos(t + Math.PI) * 26, 9, playerZ + 30 + Math.sin(t + Math.PI) * 26);
-}
 
-/* ─────────────────────────── COLLISION & PICKUPS ────────────── */
-function checkCollisions() {
-  if (state !== 'playing' || invuln > 0) return;
-  // ground
-  if (shipY < 1.0) return crash('You flew into the ground!');
-  for (const ch of chunks) {
-    if (ch.zStart > playerZ + 4 || ch.zStart + CHUNK_D * SPACING < playerZ - 4) continue;
-    for (let gz = 0; gz < CHUNK_D; gz++) for (let gx = 0; gx < W; gx++) {
-      const i = gz * W + gx;
-      const h = ch.targets[i];
-      if (h < 1) continue;
-      const w = cellWorld(ch, gx, gz);
-      const dx = Math.abs(shipX - w.x), dz = Math.abs(playerZ - w.z);
-      if (dx < 1.15 && dz < 1.15 && shipY < h - 0.3) {
-        return crash('You hit a pillar!');
-      }
-      // near miss: close but not hitting
-      if (ch.nearCd[i] <= 0 && dx < 2.3 && dz < 2.3 && shipY < h + 1.6 && shipY >= h - 0.3) {
-        ch.nearCd[i] = 2.5;
-        combo++; comboTimer = 4;
-        dna += 2; bonusScore += 100 * Math.max(1, combo);
-        AudioSys.nearMiss();
-        spawnParticles(shipX, shipY, playerZ, 0xfbbf24, 8, 3, 0.5);
-      }
-    }
-  }
-}
-function checkOrbs(dt) {
-  for (const o of orbs) {
-    if (!o.active) continue;
-    o.mesh.rotation.y += dt * 2.4;
-    o.mesh.position.y = o.baseY + Math.sin(performance.now() / 400 + o.phase) * 0.4;
-    if (state !== 'playing') continue;
-    const d = o.mesh.position.distanceTo(ship.position);
-    if (d < 1.9) {
-      o.active = false; o.mesh.visible = false;
-      if (o.shield) {
-        shield = true; els.shield.classList.remove('hidden');
-        toast('🛡️ <b>Shield!</b> Survive one crash.', true, 3000);
-        AudioSys.shieldUp();
-      } else {
-        combo++; comboTimer = 4;
-        dna += 1; bonusScore += 50 * Math.max(1, combo);
-        AudioSys.pickup(combo);
-        spawnParticles(o.mesh.position.x, o.mesh.position.y, o.mesh.position.z, 0x22d3ee, 10, 3.5, 0.6);
-      }
-    }
-  }
-}
-function crash(msg) {
-  if (shield) {
-    shield = false; invuln = 2.5; els.shield.classList.add('hidden');
-    shake = 1.6;
-    spawnParticles(shipX, shipY, playerZ, 0xfbbf24, 50, 8, 1.0);
-    AudioSys.explosion(true);
-    toast(`🛡️ Shield saved you! <b>${msg}</b>`, true, 3200);
-    return;
-  }
-  state = 'gameover';
-  ship.visible = false;
-  shake = 2.2;
-  spawnParticles(shipX, shipY, playerZ, 0x22d3ee, 70, 9, 1.2);
-  spawnParticles(shipX, shipY, playerZ, 0xe879f9, 40, 7, 1.0);
-  AudioSys.crash();
-  AudioSys.setEngine(0, false);
-  const finalScore = Math.floor(distance * 2 + bonusScore);
-  if (finalScore > best) { best = finalScore; try { localStorage.setItem('ee_best', best); } catch (e) { } }
-  $('final-score').textContent = finalScore.toLocaleString();
-  $('final-dist').textContent = Math.floor(distance) + 'm';
-  $('final-dna').textContent = dna;
-  $('final-best').textContent = best.toLocaleString();
-  setTimeout(() => {
-    $('hud').classList.add('hidden');
-    $('gameover-screen').classList.remove('hidden');
-  }, 1100);
-}
-
-/* ─────────────────────────── INPUT ──────────────────────────── */
+/* ─────────────────────────── FLIGHT & PAINTING ──────────────── */
 const keys = new Set();
-let mouseActive = false;
-window.addEventListener('mousemove', e => {
-  if (state !== 'playing') return;
-  mouseActive = true;
-  targetX = ((e.clientX / window.innerWidth) * 2 - 1) * 24;
-  targetY = 1.5 + (1 - e.clientY / window.innerHeight) * 13.5;
+function setMouseCapture(on) {
+  mouseCaptured = on;
+  if (on) canvas.requestPointerLock?.();
+  else if (document.pointerLockElement) document.exitPointerLock();
+}
+document.addEventListener('pointerlockchange', () => {
+  mouseCaptured = document.pointerLockElement === canvas;
 });
-window.addEventListener('touchmove', e => {
-  if (state !== 'playing' || !e.touches.length) return;
-  const t = e.touches[0];
-  targetX = ((t.clientX / window.innerWidth) * 2 - 1) * 24;
-  targetY = 1.5 + (1 - t.clientY / window.innerHeight) * 13.5;
-  e.preventDefault();
-}, { passive: false });
+document.addEventListener('mousemove', e => {
+  if (!mouseCaptured || overview || !started) return;
+  yaw -= e.movementX * 0.0025;
+  pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.0025, -1.54, 1.54);
+});
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+let painting = false, paintAlive = true;
+canvas.addEventListener('mousedown', e => {
+  AudioSys.init();
+  if (!started) return;
+  if (!mouseCaptured && !overview) {
+    // unlocked: paint / erase
+    painting = true; paintAlive = e.button === 0;
+    paintAtCursor(e.clientX, e.clientY, paintAlive);
+  } else if (!mouseCaptured && overview) {
+    painting = true; paintAlive = e.button === 0;
+    paintAtCursor(e.clientX, e.clientY, paintAlive);
+  } else if (mouseCaptured) {
+    // captured: click re-locks handled by browser; nothing
+  }
+});
+window.addEventListener('mouseup', () => painting = false);
+window.addEventListener('mousemove', e => {
+  if (painting && !mouseCaptured) paintAtCursor(e.clientX, e.clientY, paintAlive);
+});
+const raycaster = new THREE.Raycaster();
+const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+function paintAtCursor(clientX, clientY, alive) {
+  const ndc = new THREE.Vector2((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(groundPlane, hit)) return;
+  const x = Math.round(hit.x / SPACING + (GRID - 1) / 2);
+  const z = Math.round(hit.z / SPACING + (GRID - 1) / 2);
+  if (x < 0 || x >= GRID || z < 0 || z >= GRID) return;
+  const i = idxOf(x, z);
+  cells[i] = alive ? brushSpecies : 0;
+  ages[i] = alive ? 1 : 0;
+  refreshPopulation();
+}
+function updateFlight(dt) {
+  if (overview || !mouseCaptured || !started) return;
+  const move = new THREE.Vector3();
+  const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+  const right = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+  if (keys.has('w')) move.add(fwd);
+  if (keys.has('s')) move.sub(fwd);
+  if (keys.has('d')) move.add(right);
+  if (keys.has('a')) move.sub(right);
+  if (keys.has(' ')) move.y += 1;
+  if (keys.has('control')) move.y -= 1;
+  if (move.lengthSq() > 0) {
+    const sp = keys.has('shift') ? 55 : 19;
+    camera.position.addScaledVector(move.normalize(), sp * dt);
+    camera.position.y = Math.max(0.8, camera.position.y);
+  }
+  camera.rotation.set(pitch, yaw, 0);
+}
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
+  if (k === 'tab') { e.preventDefault(); if (started && !overview) setMouseCapture(!mouseCaptured); return; }
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
   keys.add(k);
-  if (k === 'shift') boostHeld = true;
-  if (k === 'p' || k === 'escape') togglePause();
-  if (k === 'm') toggleSound();
-  if (k === 'enter' && state === 'menu') startGame();
-  if (k === 'enter' && state === 'gameover') restart();
+  if (!started) return;
+  if (k === 'p') running = !running;
+  else if (k === 'n') { if (!running) stepSimulation(); }
+  else if (k === 'r') seedWorld();
+  else if (k === 'c') { cells.fill(0); ages.fill(0); history.fill(0); generations = 0; population = 0; hashHistory = []; }
+  else if (k === 'm') memoryEnabled = !memoryEnabled;
+  else if (k === 'x') { explosionsEnabled = !explosionsEnabled; toast(explosionsEnabled ? '💥 Explosions <b>ON</b>' : '💥 Explosions <b>OFF</b>', 1800); }
+  else if (k === 'v') toggleOverview();
+  else if (k === '[') generationInterval = Math.min(2.0, generationInterval * 1.25);
+  else if (k === ']') generationInterval = Math.max(0.035, generationInterval / 1.25);
+  else if (k === '-') heightScale = Math.max(0.2, heightScale - 0.2);
+  else if (k === '=' || k === '+') heightScale = Math.min(4.0, heightScale + 0.2);
+  else if (k === '1' || k === '2' || k === '3') brushSpecies = +k;
 });
-window.addEventListener('keyup', e => {
-  keys.delete(e.key.toLowerCase());
-  if (e.key.toLowerCase() === 'shift') boostHeld = false;
-});
-$('boost-btn').addEventListener('pointerdown', e => { e.preventDefault(); boostHeld = true; });
-$('boost-btn').addEventListener('pointerup', () => boostHeld = false);
-$('boost-btn').addEventListener('pointerleave', () => boostHeld = false);
-function keyboardSteer(dt) {
-  let mx = 0, my = 0;
-  if (keys.has('a') || keys.has('arrowleft')) mx -= 1;
-  if (keys.has('d') || keys.has('arrowright')) mx += 1;
-  if (keys.has('w') || keys.has('arrowup')) my += 1;
-  if (keys.has('s') || keys.has('arrowdown')) my -= 1;
-  if (mx || my) {
-    mouseActive = false;
-    targetX = THREE.MathUtils.clamp(targetX + mx * 30 * dt, -24, 24);
-    targetY = THREE.MathUtils.clamp(targetY + my * 20 * dt, 1.2, 15);
+window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+function toggleOverview() {
+  overview = !overview;
+  if (overview) {
+    camera.position.set(0, 105, 68);
+    yaw = 0; pitch = -0.95;
+    setMouseCapture(false);
+  } else {
+    camera.position.set(0, 16, 40);
+    yaw = 0; pitch = -0.30;
+    setMouseCapture(true);
   }
+  camera.rotation.set(pitch, yaw, 0);
 }
 
 /* ─────────────────────────── UI ─────────────────────────────── */
-function toast(html, gold = false, dur = 3200) {
+function toast(html, dur = 3000) {
   const t = document.createElement('div');
-  t.className = 'toast' + (gold ? ' gold' : ''); t.innerHTML = html;
-  els.toasts.appendChild(t);
+  t.className = 'toast'; t.innerHTML = html;
+  $('toasts').appendChild(t);
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 450); }, dur);
 }
 let warnTimer = null;
 function showWarn() {
-  els.warn.classList.remove('hidden');
+  $('warn-banner').classList.remove('hidden');
   clearTimeout(warnTimer);
-  warnTimer = setTimeout(() => els.warn.classList.add('hidden'), 2600);
+  warnTimer = setTimeout(() => $('warn-banner').classList.add('hidden'), 2600);
 }
 function updateHUD() {
-  els.score.textContent = Math.floor(distance * 2 + bonusScore).toLocaleString();
-  els.dist.textContent = Math.floor(distance) + 'm';
-  els.dna.textContent = dna;
-  els.speed.textContent = Math.round(speed);
-  els.combo.textContent = '×' + Math.max(1, combo);
-  let gen = 0, pop = 0, oldest = 0;
-  for (const ch of chunks) { gen += ch.gen; pop += ch.pop; oldest = Math.max(oldest, ch.oldest); }
-  els.lifeInfo.textContent = `Life (${RULES[ruleKey].name}): Gen ${gen} · Pop ${pop} · Oldest ${oldest}`;
+  const mode = overview ? 'OVERVIEW' : 'FLIGHT';
+  $('stats').textContent =
+    `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}     Explosions ${explosions}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}   |   Explosions ${explosionsEnabled ? 'ON' : 'OFF'}`;
 }
-function toggleSound() {
+$('sound-btn').addEventListener('click', () => {
   AudioSys.init();
   AudioSys.setMuted(!AudioSys.muted);
   $('sound-btn').textContent = AudioSys.muted ? '🔇' : '🔊';
-}
-function togglePause() {
-  if (state === 'playing') { state = 'paused'; $('pause-overlay').classList.remove('hidden'); AudioSys.setEngine(0, false); }
-  else if (state === 'paused') { state = 'playing'; $('pause-overlay').classList.add('hidden'); }
-}
-function startGame() {
+});
+$('play-btn').addEventListener('click', () => {
   AudioSys.init();
-  resetWorld();
-  state = 'playing';
+  started = true;
   $('start-screen').classList.add('hidden');
-  $('gameover-screen').classList.add('hidden');
-  $('pause-overlay').classList.add('hidden');
   $('hud').classList.remove('hidden');
-  toast('🚀 <b>Good luck!</b> Young pillars are short — old ones will kill you.', true, 4500);
-  updateHUD();
-}
-function restart() { startGame(); }
-function toMenu() {
-  state = 'menu';
-  resetWorld();
-  $('gameover-screen').classList.add('hidden');
-  $('pause-overlay').classList.add('hidden');
-  $('hud').classList.add('hidden');
-  $('start-screen').classList.remove('hidden');
-  AudioSys.setEngine(0, false);
-}
-$('play-btn').addEventListener('click', startGame);
-$('restart-btn').addEventListener('click', restart);
-$('menu-btn').addEventListener('click', toMenu);
-$('resume-btn').addEventListener('click', togglePause);
-$('quit-btn').addEventListener('click', toMenu);
-$('pause-btn').addEventListener('click', togglePause);
-$('sound-btn').addEventListener('click', toggleSound);
-document.querySelectorAll('.rule-btn').forEach(b => b.addEventListener('click', () => {
-  ruleKey = b.dataset.rule;
-  birthSet = new Set(RULES[ruleKey].birth); surviveSet = new Set(RULES[ruleKey].survive);
-  document.querySelectorAll('.rule-btn').forEach(x => x.classList.toggle('active', x === b));
-  AudioSys.init(); AudioSys.click();
-}));
+  setMouseCapture(true);
+  toast('🧬 Welcome to the Living Terrain. <b>Tab</b> unlocks mouse to paint life.', 4500);
+});
 
 /* ─────────────────────────── MAIN LOOP ──────────────────────── */
 function resize() {
@@ -690,59 +397,39 @@ function resize() {
 window.addEventListener('resize', resize);
 resize();
 
-let lastT = performance.now(), lastDt = 0.016, orbTimer = 0, hudTimer = 0, menuTime = 0;
+let lastT = performance.now(), hudTimer = 0;
 function loop() {
   requestAnimationFrame(loop);
   const nowMs = performance.now();
-  const dt = Math.min(0.05, (nowMs - lastT) / 1000); lastT = nowMs; lastDt = dt;
-  const now = nowMs / 1000;
-
-  if (state === 'menu') {
-    menuTime += dt;
-    speed = 12;
-    playerZ += speed * dt;
-    targetX = Math.sin(menuTime * 0.45) * 11;
-    targetY = 6 + Math.sin(menuTime * 0.7) * 2.2;
-    updateChunks();
-    AudioSys.setEngine(0.2, false);
-  } else if (state === 'playing') {
-    keyboardSteer(dt);
-    targetX = THREE.MathUtils.clamp(targetX, -24, 24);
-    targetY = THREE.MathUtils.clamp(targetY, 1.2, 15);
-    baseSpeed = Math.min(32, 14 + Math.floor(distance / 400) * 0.7);
-    speed = baseSpeed * (boostHeld ? 1.55 : 1);
-    playerZ += speed * dt;
-    distance += speed * dt;
-    if (invuln > 0) invuln -= dt;
-    if (comboTimer > 0) { comboTimer -= dt; if (comboTimer <= 0) combo = 0; }
-    // speed level ups
-    const lvl = Math.floor(distance / 400);
-    if (lvl > lastSpeedLevel) { lastSpeedLevel = lvl; toast(`⚡ <b>Speed up!</b> ${Math.round(baseSpeed)} u/s`, true, 2600); AudioSys.speedup(); }
-    if (distance >= nextShieldAt) { nextShieldAt += 700; spawnOrb(true); }
-    orbTimer += dt; if (orbTimer > 0.7) { orbTimer = 0; spawnOrb(false); }
-    updateChunks();
-    checkCollisions();
-    AudioSys.setEngine((speed - 12) / 24, true);
-    hudTimer += dt; if (hudTimer > 0.15) { hudTimer = 0; updateHUD(); }
-  } else if (state === 'gameover') {
-    // drift forward slowly, world keeps living behind the overlay
-    playerZ += 2 * dt;
-    updateChunks();
+  const dt = Math.min(0.05, (nowMs - lastT) / 1000); lastT = nowMs;
+  if (running && started) {
+    accumulated += dt;
+    let steps = 0;
+    while (accumulated >= generationInterval && steps < 4) {
+      stepSimulation();
+      accumulated -= generationInterval;
+      steps++;
+    }
+    if (steps === 4) accumulated = 0;
+  } else if (running && !started) {
+    // attract: evolve behind start screen
+    accumulated += dt;
+    let steps = 0;
+    while (accumulated >= generationInterval && steps < 4) {
+      stepSimulation();
+      accumulated -= generationInterval;
+      steps++;
+    }
+    if (steps === 4) accumulated = 0;
   }
-  // paused: freeze everything except render
-
-  if (state !== 'paused') {
-    renderPillars(dt, now);
-    updateShipAndCamera(dt, now);
-    updateParticles(dt);
-    checkOrbs(dt);
-    // decay near-miss cooldowns
-    for (const ch of chunks) for (let i = 0; i < ch.nearCd.length; i++) if (ch.nearCd[i] > 0) ch.nearCd[i] -= dt;
-  }
+  updateVisuals(dt);
+  updateFlight(dt);
+  updateParticles(dt);
+  hudTimer += dt; if (hudTimer > 0.12) { hudTimer = 0; if (started) updateHUD(); }
   renderer.render(scene, camera);
 }
 
 /* ─────────────────────────── BOOT ───────────────────────────── */
-resetWorld();
-camera.position.set(0, 9.4, -9.5);
+seedWorld();
+camera.rotation.set(pitch, yaw, 0);
 loop();

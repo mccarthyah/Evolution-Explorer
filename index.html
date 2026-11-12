@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Evolution Explorer — Fly Through Living Pillars</title>
-<meta name="description" content="Fly through pillars grown by Conway's Game of Life. Height = age. Old pillars explode. Dodge, collect DNA, survive.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
+<title>EVOLUTION — Living Terrain</title>
+<meta name="description" content="Fly through pillars grown by Conway's Game of Life. Height = age + terrain memory. Old pillars explode.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>">
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 { "imports": { "three": "./lib/three.module.js" } }
@@ -15,91 +15,34 @@
 
 <canvas id="game-canvas"></canvas>
 
-<!-- ══════════ START SCREEN ══════════ -->
+<!-- ══════════ START ══════════ -->
 <div id="start-screen" class="overlay">
   <div class="start-card">
-    <div class="logo">🚀</div>
-    <h1>EVOLUTION<br><span>EXPLORER</span></h1>
+    <div class="logo">🧬</div>
+    <h1>EVOLUTION<br><span>LIVING TERRAIN</span></h1>
     <p class="tagline">Fly through pillars <b>grown by the Game of Life</b>.<br>
-    Pillar height = how long its cells have lived.<br>
-    Old pillars <b>explode</b> — and so do stagnant, repeating patterns.</p>
-
+    Height = how long cells have lived + terrain memory.<br>
+    Cells <b>explode at age 65</b> — and stagnant, repeating patterns detonate too.</p>
     <div class="howto">
-      <div class="howto-row"><span>🖱️</span><p><b>Move mouse</b> to steer your ship</p></div>
-      <div class="howto-row"><span>⌨️</span><p><b>WASD / arrows</b> steer &nbsp;•&nbsp; <b>Shift</b> boost</p></div>
-      <div class="howto-row"><span>📱</span><p><b>Drag</b> to steer on touch screens</p></div>
-      <div class="howto-row"><span>🧬</span><p>Collect <b>DNA orbs</b>, skim pillars for <b>near-miss</b> bonuses</p></div>
-      <div class="howto-row"><span>💥</span><p>Don't hit tall pillars — young = short = safe, old = tall = deadly</p></div>
+      <div class="howto-row"><span>🖱️</span><p><b>Click</b> to capture mouse &amp; fly — <b>WASD</b> move, <b>Space/Ctrl</b> rise/fall, <b>Shift</b> boost</p></div>
+      <div class="howto-row"><span>🎨</span><p><b>Tab</b> unlocks mouse to <b>paint</b> (left) / <b>erase</b> (right) — species <b>1 / 2 / 3</b></p></div>
+      <div class="howto-row"><span>👁️</span><p><b>V</b> overview &nbsp;•&nbsp; <b>P</b> pause &nbsp;•&nbsp; <b>N</b> step &nbsp;•&nbsp; <b>R</b> random &nbsp;•&nbsp; <b>C</b> clear</p></div>
+      <div class="howto-row"><span>⚙️</span><p><b>[ / ]</b> speed &nbsp;•&nbsp; <b>- / =</b> height &nbsp;•&nbsp; <b>M</b> memory &nbsp;•&nbsp; <b>X</b> explosions</p></div>
     </div>
-
-    <div class="rule-pick">
-      <p class="start-label">LIFE RULES</p>
-      <div class="rule-row">
-        <button class="rule-btn active" data-rule="classic">Conway B3/S23</button>
-        <button class="rule-btn" data-rule="highlife">HighLife B36/S23</button>
-        <button class="rule-btn" data-rule="daynight">Day &amp; Night B3678/S34678</button>
-      </div>
-    </div>
-
-    <button id="play-btn" class="play-btn">▶ &nbsp;TAKE OFF</button>
-    <p class="best-line" id="best-line"></p>
-  </div>
-</div>
-
-<!-- ══════════ GAME OVER ══════════ -->
-<div id="gameover-screen" class="overlay hidden">
-  <div class="start-card">
-    <div class="logo">💥</div>
-    <h1>CRASHED!</h1>
-    <p class="tagline">Your ship met a pillar. The Life goes on without you…</p>
-    <div class="final-stats">
-      <div class="fstat"><label>SCORE</label><b id="final-score">0</b></div>
-      <div class="fstat"><label>DISTANCE</label><b id="final-dist">0m</b></div>
-      <div class="fstat"><label>DNA</label><b id="final-dna">0</b></div>
-      <div class="fstat"><label>BEST</label><b id="final-best">0</b></div>
-    </div>
-    <button id="restart-btn" class="play-btn">↻ &nbsp;FLY AGAIN</button>
-    <button id="menu-btn" class="ghost-btn">Back to menu</button>
+    <button id="play-btn" class="play-btn">▶ &nbsp;START FLYING</button>
   </div>
 </div>
 
 <!-- ══════════ HUD ══════════ -->
 <div id="hud" class="hidden">
-  <header id="topbar">
-    <div class="brand"><span class="brand-icon">🚀</span><div><strong>EVOLUTION EXPLORER</strong><small id="life-info">Life: Gen 0 · Pop 0</small></div></div>
-    <div class="top-stats">
-      <div class="stat"><label>SCORE</label><b id="stat-score">0</b></div>
-      <div class="stat"><label>DISTANCE</label><b id="stat-dist">0m</b></div>
-      <div class="stat dna"><label>🧬 DNA</label><b id="stat-dna">0</b></div>
-      <div class="stat"><label>SPEED</label><b id="stat-speed">0</b></div>
-      <div class="stat combo"><label>COMBO</label><b id="stat-combo">×1</b></div>
-    </div>
-    <div class="top-actions">
-      <button id="shield-ind" class="icon-btn hidden" title="Shield active">🛡️</button>
-      <button id="sound-btn" class="icon-btn" title="Sound (M)">🔊</button>
-      <button id="pause-btn" class="icon-btn" title="Pause (P)">⏸</button>
-    </div>
-  </header>
-
-  <div id="warn-banner" class="hidden">⚠️ STAGNATION DETECTED — PILLARS EXPLODING!</div>
-
-  <footer id="bottombar">
-    <div class="bottom-hint" id="bottom-hint">🖱️ Move mouse to steer &nbsp;•&nbsp; <b>Shift</b> boost &nbsp;•&nbsp; <b>P</b> pause</div>
-    <button id="boost-btn" class="boost-btn">⚡ BOOST</button>
-  </footer>
-
+  <div id="stats">EVOLUTION / LIVING TERRAIN</div>
+  <div id="warn-banner" class="hidden">⚠️ STAGNATION DETECTED — OLD PILLARS EXPLODING!</div>
+  <div id="hint">WASD fly | Mouse look | Space/Ctrl rise/fall | Shift boost<br>
+  Tab mouse unlock | V overview | P pause | N step | R randomize | C clear<br>
+  [ / ] speed | - / = height | M terrain memory | 1/2/3 species | X explosions<br>
+  Unlock mouse with Tab to LEFT-CLICK paint / RIGHT-CLICK erase on the ground</div>
   <div id="toasts"></div>
-  <div id="vignette"></div>
-</div>
-
-<!-- ══════════ PAUSE ══════════ -->
-<div id="pause-overlay" class="overlay hidden">
-  <div class="start-card small-card">
-    <h1>⏸ PAUSED</h1>
-    <p class="tagline">The pillars wait for no one… except now.</p>
-    <button id="resume-btn" class="play-btn">▶ &nbsp;RESUME</button>
-    <button id="quit-btn" class="ghost-btn">Quit to menu</button>
-  </div>
+  <button id="sound-btn" class="icon-btn" title="Sound on/off">🔊</button>
 </div>
 
 <script type="module" src="js/main.js"></script>
