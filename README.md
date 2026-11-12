@@ -10,6 +10,8 @@ Towers **explode at age 40** — harvest the gold ⚡ **biomass** they leave beh
 
 ## ▶️ Play it
 
+**▶▶ Play now in your browser: [mccarthyah.github.io/Evolution-Explorer](https://mccarthyah.github.io/Evolution-Explorer/)** *(requires GitHub Pages — see below)*
+
 ### Godot version (original)
 
 1. Open [Godot 4.x](https://godotengine.org/download), **Import** this folder (`project.godot` at the root).
