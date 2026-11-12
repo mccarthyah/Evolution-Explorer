@@ -30,6 +30,7 @@
       <div class="howto-row"><span>⚡</span><p><b>Harvest gold orbs</b> at blast sites for biomass — tools: <b>4</b> R-pento 5⚡ • <b>5</b> Glider 10⚡ • <b>6</b> Pulsar 25⚡</p></div>
       <div class="howto-row"><span>🧰</span><p><b>7</b> Seed Rain 20⚡ • <b>8</b> Stasis Field 15⚡ • <b>9</b> Glider Gun 60⚡ — aim at the ground</p></div>
       <div class="howto-row"><span>👁️</span><p><b>V</b> overview &nbsp;•&nbsp; <b>P</b> pause &nbsp;•&nbsp; <b>N</b> step &nbsp;•&nbsp; <b>R</b> random &nbsp;•&nbsp; <b>[ / ]</b> speed &nbsp;•&nbsp; <b>M</b> memory</p></div>
+      <div class="howto-row"><span>🔬</span><p><b>J</b> field journal — discover 12 named lifeforms &nbsp;•&nbsp; <b>S / L</b> save &amp; share ecosystem codes &nbsp;•&nbsp; <b>B</b> bloom &nbsp;•&nbsp; <b>T</b> day/night</p></div>
     </div>
     <button id="play-btn" class="play-btn">▶ &nbsp;START FLYING</button>
   </div>
@@ -43,9 +44,37 @@ V overview | P pause | N step | R randomize | C clear | Esc pause
 [ / ] speed | - / = height | M memory | 1/2/3 species | F/G place/erase cell
 Seed tools (aim at ground): 4 R-pento 5⚡ | 5 Glider 10⚡ | 6 Pulsar 25⚡ | 7 Rain 20⚡
 8 Stasis 15⚡ | 9 Glider Gun 60⚡ — harvest gold orbs at blast sites for ⚡
+J field journal | S save code / L load code | B bloom | T day/night
 Instability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON</div>
   <div id="toasts"></div>
+  <div id="journal" class="journal hidden"></div>
   <button id="sound-btn" class="icon-btn" title="Sound on/off">🔊</button>
+</div>
+
+<!-- ══════════ SAVE MODAL ══════════ -->
+<div id="save-modal" class="modal hidden">
+  <div class="modal-card">
+    <h2>💾 Ecosystem code</h2>
+    <p class="modal-note">Share this code — anyone can paste it (L) to fly through your exact world.</p>
+    <textarea id="save-area" readonly spellcheck="false"></textarea>
+    <div class="modal-row">
+      <button id="save-copy-btn" class="modal-btn primary">📋 Copy</button>
+      <button id="save-close-btn" class="modal-btn">Close</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ LOAD MODAL ══════════ -->
+<div id="load-modal" class="modal hidden">
+  <div class="modal-card">
+    <h2>🧬 Load ecosystem</h2>
+    <p class="modal-note">Paste an EVO1 code (yours or a friend's) and take over their world.</p>
+    <textarea id="load-area" spellcheck="false" placeholder="EVO1;48;.48a12b3..."></textarea>
+    <div class="modal-row">
+      <button id="load-go-btn" class="modal-btn primary">Load</button>
+      <button id="load-close-btn" class="modal-btn">Cancel</button>
+    </div>
+  </div>
 </div>
 
 <script type="module" src="js/main.js"></script>

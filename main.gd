@@ -94,6 +94,7 @@ const CONTRACTS: Array = [
 	{"id": "explode", "text": "Witness 3 detonations", "target": 3, "reward": 20},
 	{"id": "balance", "text": "Grow 40+ living cells of all 3 species", "target": 3, "reward": 25},
 	{"id": "tools", "text": "Use 3 different seed tools", "target": 3, "reward": 25},
+	{"id": "journal", "text": "Discover 6 lifeforms (J for journal)", "target": 6, "reward": 30},
 	{"id": "pop", "text": "Grow the population to 400", "target": 400, "reward": 30},
 	{"id": "gen300", "text": "Sustain the world to generation 300", "target": 300, "reward": 40},
 	{"id": "master", "text": "MASTER GARDENER: gen 600, 300 alive, 100 biomass", "target": 3, "reward": 100},
@@ -110,6 +111,36 @@ var toast_label: Label
 var toast_ttl: float = 0.0
 var shake: float = 0.0
 var shake_offset: Vector3 = Vector3.ZERO
+
+# ── Field journal / discovery ──
+const JOURNAL_PATTERNS: Array = [
+	{"name": "Block", "rows": ["OO", "OO"], "desc": "still life"},
+	{"name": "Tub", "rows": [".O.", "O.O", ".O."], "desc": "still life"},
+	{"name": "Boat", "rows": ["OO.", "O.O"], "desc": "still life"},
+	{"name": "Beehive", "rows": [".OO.", "O..O", ".OO."], "desc": "still life"},
+	{"name": "Loaf", "rows": [".OO.", "O..O", ".O.O", ".O.."], "desc": "still life"},
+	{"name": "Blinker", "rows": ["OOO"], "desc": "oscillator p2"},
+	{"name": "Toad", "rows": [".OOO", "OOO."], "desc": "oscillator p2"},
+	{"name": "Beacon", "rows": ["OO..", "OO..", "..OO", "..OO"], "desc": "oscillator p2"},
+	{"name": "Glider", "rows": [".O.", "..O", "OOO"], "desc": "spaceship c/4"},
+	{"name": "Lightweight Ship", "rows": [".O..O", "O....", "O...O", "OOOO."], "desc": "spaceship c/2"},
+	{"name": "Pulsar", "rows": PULSAR_ROWS, "desc": "oscillator p3"},
+	{"name": "Glider Gun", "rows": GUN_ROWS, "desc": "endless gliders"},
+]
+var discoveries: Dictionary = {}
+var journal_sigs: Dictionary = {}
+var journal_label: Label
+
+# ── Day/night cycle + glow ──
+const DAY_LENGTH: float = 150.0
+const BASE_BG := Color(0.009, 0.014, 0.034)
+const BASE_FLOOR := Color(0.025, 0.045, 0.085)
+var day_night_enabled: bool = true
+var day_time: float = 0.0
+var world_brightness: float = 1.0
+var sun_light: DirectionalLight3D
+var floor_material: StandardMaterial3D
+var world_env: Environment
 
 var mesh_instance: MultiMeshInstance3D
 var multimesh: MultiMesh
@@ -131,6 +162,7 @@ func _ready() -> void:
 	build_world()
 	seed_world()
 	biomass = STARTING_BIOMASS
+	build_journal_sigs()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func build_world() -> void:
@@ -161,12 +193,14 @@ func build_world() -> void:
 	floor_mat.metallic = 0.5
 	floor_mat.roughness = 0.52
 	floor_mesh.material_override = floor_mat
+	floor_material = floor_mat
 	add_child(floor_mesh)
 
 	var light: DirectionalLight3D = DirectionalLight3D.new()
 	light.rotation_degrees = Vector3(-58.0, -35.0, 0.0)
 	light.light_energy = 0.95
 	add_child(light)
+	sun_light = light
 	var world: WorldEnvironment = WorldEnvironment.new()
 	var env: Environment = Environment.new()
 	env.background_mode = Environment.BG_COLOR
@@ -174,8 +208,14 @@ func build_world() -> void:
 	env.ambient_light_source = Environment.AMBIENT_SOURCE_COLOR
 	env.ambient_light_color = Color(0.25, 0.33, 0.52)
 	env.ambient_light_energy = 0.7
+	env.glow_enabled = true
+	env.glow_intensity = 1.0
+	env.glow_strength = 0.55
+	env.glow_hdr_threshold = 0.8
+	env.glow_blend_mode = Environment.GLOW_BLEND_MODE_SOFTLIGHT
 	world.environment = env
 	add_child(world)
+	world_env = env
 
 	camera = Camera3D.new()
 	camera.current = true
@@ -196,7 +236,7 @@ func build_world() -> void:
 	hint.position = Vector2(20.0, 125.0)
 	hint.add_theme_font_size_override("font_size", 14)
 	hint.add_theme_color_override("font_color", Color(0.77, 0.83, 0.96))
-	hint.text = "WASD fly  |  Arrow keys look  |  Space/Ctrl rise/fall  |  Shift boost\nV overview  |  P pause  |  N step  |  R randomize  |  C clear  |  Esc quit\n[ / ] speed  |  - / = height  |  M memory  |  1/2/3 species  |  F/G place/erase cell\nSeed tools (aim at ground): 4 R-pento 5⚡  5 Glider 10⚡  6 Pulsar 25⚡  7 Rain 20⚡\n8 Stasis 15⚡  9 Glider Gun 60⚡  —  harvest gold orbs at blast sites for ⚡"
+	hint.text = "WASD fly  |  Arrow keys look  |  Space/Ctrl rise/fall  |  Shift boost\nV overview  |  P pause  |  N step  |  R randomize  |  C clear  |  Esc quit\n[ / ] speed  |  - / = height  |  M memory  |  1/2/3 species  |  F/G place/erase cell\nSeed tools (aim at ground): 4 R-pento 5⚡  5 Glider 10⚡  6 Pulsar 25⚡  7 Rain 20⚡\n8 Stasis 15⚡  9 Glider Gun 60⚡  —  harvest gold orbs at blast sites for ⚡\nJ field journal  |  S save code / L load code  |  B bloom  |  T day/night"
 	canvas.add_child(hint)
 	hint.text += "\nInstability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON"
 	toast_label = Label.new()
@@ -205,6 +245,13 @@ func build_world() -> void:
 	toast_label.add_theme_color_override("font_color", Color(0.65, 1.0, 0.85))
 	toast_label.visible = false
 	canvas.add_child(toast_label)
+	journal_label = Label.new()
+	journal_label.position = Vector2(1000.0, 18.0)
+	journal_label.add_theme_font_size_override("font_size", 15)
+	journal_label.add_theme_color_override("font_color", Color(0.65, 0.9, 1.0))
+	journal_label.visible = false
+	canvas.add_child(journal_label)
+	refresh_journal()
 
 func index_of(x: int, z: int) -> int:
 	return z * GRID + x
@@ -357,6 +404,17 @@ func find_oscillators() -> void:
 						frontier.append(ni)
 		if component.size() < 2 or component.size() > OSCILLATOR_MAX_CELLS:
 			continue
+		# Field journal discovery: match shape signature against the library.
+		var sig: String = component_signature(component)
+		if journal_sigs.has(sig):
+			var pname: String = journal_sigs[sig]
+			if not discoveries.has(pname):
+				discoveries[pname] = true
+				biomass += 10
+				biomass_collected_total += 10
+				show_banner("🔬 DISCOVERED: %s  (+10 ⚡)" % pname, Color(0.55, 0.9, 1.0))
+				print("EVOLUTION: discovered ", pname, " at generation ", generations)
+				refresh_journal()
 		var min_x: int = GRID
 		var min_z: int = GRID
 		var max_x: int = 0
@@ -515,6 +573,20 @@ func _spawn_burst(pos: Vector3, color: Color, amount: int) -> void:
 	get_tree().create_timer(1.2).timeout.connect(func() -> void: if is_instance_valid(p): p.queue_free())
 
 func _process(delta: float) -> void:
+	# Day/night cycle.
+	if day_night_enabled:
+		day_time += delta
+		var day_phase: float = fmod(day_time, DAY_LENGTH) / DAY_LENGTH
+		world_brightness = 0.72 + 0.28 * (0.5 + 0.5 * sin(day_phase * TAU - PI * 0.5))
+	else:
+		world_brightness = 1.0
+	if world_env != null:
+		world_env.background_color = BASE_BG * world_brightness
+		world_env.ambient_light_energy = 0.7 * world_brightness
+	if sun_light != null:
+		sun_light.light_energy = 0.95 * world_brightness
+	if floor_material != null:
+		floor_material.albedo_color = BASE_FLOOR * world_brightness
 	if running:
 		accumulated += delta
 		var steps: int = 0
@@ -548,7 +620,7 @@ func _process(delta: float) -> void:
 	var mode: String = "OVERVIEW" if overview else "FLIGHT"
 	hud.text = "EVOLUTION  /  LIVING TERRAIN\nGeneration %d     Alive %d     %s\n%s   |   %.1f gen/sec   |   Height %.1fx   |   Memory %s   |   Brush %d" % [generations, population, mode, "RUNNING" if running else "PAUSED", 1.0 / generation_interval, height_scale, "ON" if memory_enabled else "OFF", brush_species]
 	hud.text += "\nExplosions %d  |  Last %s" % [explosions_total, last_explosion]
-	hud.text += "\n⚡ Biomass %d   |   Contract %s" % [biomass, contract_hud_text()]
+	hud.text += "\n⚡ Biomass %d   |   🔬 %d/%d   |   Contract %s" % [biomass, discoveries.size(), JOURNAL_PATTERNS.size(), contract_hud_text()]
 
 func update_visuals(delta: float) -> void:
 	for z in range(GRID):
@@ -562,14 +634,15 @@ func update_visuals(delta: float) -> void:
 			var h: float = maxf(0.025, heights[i])
 			var pos: Vector3 = Vector3((float(x) - float(GRID - 1) * 0.5) * SPACING, h * 0.5, (float(z) - float(GRID - 1) * 0.5) * SPACING)
 			multimesh.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(1.0, h, 1.0)), pos))
-			var tint: Color
-			if living > 0:
-				tint = PALETTE[living - 1].lerp(Color(1.0, 0.52, 0.26), age_factor * 0.55)
-				if ages[i] >= TOWER_LIFESPAN - 8:
-					tint = tint.lerp(Color(1.0, 0.16, 0.04), 0.65 + 0.35 * sin(float(generations) * 2.0))
-			else:
-				tint = Color(0.06, 0.14, 0.26).lerp(Color(0.19, 0.26, 0.42), terrain_memory)
-			multimesh.set_instance_color(i, tint)
+		var tint: Color
+		if living > 0:
+			tint = PALETTE[living - 1].lerp(Color(1.0, 0.52, 0.26), age_factor * 0.55)
+			if ages[i] >= TOWER_LIFESPAN - 8:
+				tint = tint.lerp(Color(1.0, 0.16, 0.04), 0.65 + 0.35 * sin(float(generations) * 2.0))
+		else:
+			tint = Color(0.06, 0.14, 0.26).lerp(Color(0.19, 0.26, 0.42), terrain_memory)
+		tint = Color(tint.r * world_brightness, tint.g * world_brightness, tint.b * world_brightness)
+		multimesh.set_instance_color(i, tint)
 
 func update_flight(delta: float) -> void:
 	var look_speed: float = 1.65
@@ -643,6 +716,22 @@ func _unhandled_input(event: InputEvent) -> void:
 				brush_species = event.keycode - KEY_1 + 1
 			KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
 				use_tool(event.keycode)
+			KEY_B:
+				if world_env != null:
+					world_env.glow_enabled = not world_env.glow_enabled
+			KEY_T:
+				day_night_enabled = not day_night_enabled
+			KEY_J:
+				journal_label.visible = not journal_label.visible
+				refresh_journal()
+			KEY_S:
+				DisplayServer.clipboard_set(encode_ecosystem())
+				show_banner("Ecosystem code copied to clipboard", Color(0.65, 1.0, 0.85))
+			KEY_L:
+				if decode_ecosystem(DisplayServer.clipboard_get()):
+					show_banner("Ecosystem loaded from clipboard ✓", Color(0.65, 1.0, 0.85))
+				else:
+					show_banner("No valid EVO1 code in clipboard", Color(1.0, 0.55, 0.6))
 			KEY_F, KEY_G:
 				paint_at_cursor(get_viewport().get_visible_rect().size * 0.5, event.keycode == KEY_F)
 
@@ -850,6 +939,8 @@ func contract_done(contract: Dictionary) -> bool:
 			return float(ok) >= target
 		"tools":
 			return float(tools_used.size()) >= target
+		"journal":
+			return float(discoveries.size()) >= target
 		"pop":
 			return float(max_population) >= target
 		"gen300":
@@ -871,6 +962,165 @@ func species_counts() -> Array:
 		if cells[i] != 0:
 			counts[int(cells[i]) - 1] += 1
 	return counts
+
+# ── Field journal helpers ──
+func rows_to_points(rows: Array) -> Array:
+	var pts: Array = []
+	for r in range(rows.size()):
+		var row: String = rows[r]
+		for c in range(row.length()):
+			if row[c] != ".":
+				pts.append(Vector2i(c, r))
+	return pts
+
+func points_signature(pts: Array) -> String:
+	var min_x: int = GRID
+	var min_z: int = GRID
+	for p in pts:
+		min_x = mini(min_x, p.x)
+		min_z = mini(min_z, p.y)
+	var normalized: Array = []
+	for p in pts:
+		normalized.append(Vector2i(p.x - min_x, p.y - min_z))
+	normalized.sort_custom(func(a, b): return a.y < b.y or (a.y == b.y and a.x < b.x))
+	var parts: PackedStringArray = PackedStringArray()
+	for p in normalized:
+		parts.append("%d,%d" % [p.x, p.y])
+	return "/".join(parts)
+
+func rotate_rows(rows: Array) -> Array:
+	var r_count: int = rows.size()
+	var c_count: int = String(rows[0]).length()
+	var out: Array = []
+	for c in range(c_count):
+		var line: String = ""
+		for r in range(r_count):
+			line += String(rows[r_count - 1 - r])[c]
+		out.append(line)
+	return out
+
+func mirror_rows(rows: Array) -> Array:
+	var out: Array = []
+	for row in rows:
+		var line: String = ""
+		for c in range(String(row).length() - 1, -1, -1):
+			line += String(row)[c]
+		out.append(line)
+	return out
+
+func build_journal_sigs() -> void:
+	for pattern in JOURNAL_PATTERNS:
+		var variants: Array = [pattern["rows"]]
+		for k in range(3):
+			variants.append(rotate_rows(variants[variants.size() - 1]))
+		variants.append(mirror_rows(pattern["rows"]))
+		for k in range(3):
+			variants.append(rotate_rows(variants[variants.size() - 1]))
+		var seen: Dictionary = {}
+		for v in variants:
+			var key: String = "/".join(v)
+			if seen.has(key):
+				continue
+			seen[key] = true
+			var sig: String = points_signature(rows_to_points(v))
+			if not journal_sigs.has(sig):
+				journal_sigs[sig] = pattern["name"]
+
+func component_signature(component: Array) -> String:
+	var min_x: int = GRID
+	var min_z: int = GRID
+	for idx in component:
+		min_x = mini(min_x, idx % GRID)
+		min_z = mini(min_z, idx / GRID)
+	var normalized: Array = []
+	for idx in component:
+		normalized.append(Vector2i(idx % GRID - min_x, idx / GRID - min_z))
+	normalized.sort_custom(func(a, b): return a.y < b.y or (a.y == b.y and a.x < b.x))
+	var parts: PackedStringArray = PackedStringArray()
+	for p in normalized:
+		parts.append("%d,%d" % [p.x, p.y])
+	return "/".join(parts)
+
+func refresh_journal() -> void:
+	if journal_label == null:
+		return
+	journal_label.text = journal_text()
+
+func journal_text() -> String:
+	var t: String = "🔬 FIELD JOURNAL  %d/%d\n\n" % [discoveries.size(), JOURNAL_PATTERNS.size()]
+	for pattern in JOURNAL_PATTERNS:
+		var pname: String = pattern["name"]
+		if discoveries.has(pname):
+			t += "✔ " + pname + "  —  " + String(pattern["desc"]) + "\n"
+		else:
+			t += "·  ???\n"
+	return t
+
+# ── Ecosystem save/share (EVO1 run-length codes) ──
+func encode_ecosystem() -> String:
+	var rows: Array = []
+	for z in range(GRID):
+		var s: String = ""
+		var run: int = 0
+		var val: int = -1
+		for x in range(GRID):
+			var v: int = int(cells[index_of(x, z)])
+			if v == val:
+				run += 1
+			else:
+				if val >= 0:
+					s += ".abc"[val] + str(run)
+				val = v
+				run = 1
+		s += ".abc"[val] + str(run)
+		rows.append(s)
+	return "EVO1;%d;%s" % [GRID, "/".join(rows)]
+
+func decode_ecosystem(code: String) -> bool:
+	var parts: PackedStringArray = code.strip_edges().split(";", false)
+	if parts.size() != 3 or parts[0] != "EVO1":
+		return false
+	if int(parts[1]) != GRID:
+		return false
+	var rows: PackedStringArray = parts[2].split("/", false)
+	if rows.size() != GRID:
+		return false
+	var decoded: PackedByteArray = PackedByteArray()
+	decoded.resize(TOTAL)
+	for z in range(GRID):
+		var row: String = rows[z]
+		var x: int = 0
+		var p: int = 0
+		while p < row.length():
+			var v: int = ".abc".find(row[p])
+			if v < 0:
+				return false
+			p += 1
+			var num: String = ""
+			while p < row.length() and row[p] >= "0" and row[p] <= "9":
+				num += row[p]
+				p += 1
+			if not num.is_valid_int():
+				return false
+			var n: int = int(num)
+			if n <= 0 or x + n > GRID:
+				return false
+			for k in range(n):
+				decoded[index_of(x + k, z)] = v
+			x += n
+		if x != GRID:
+			return false
+	cells = decoded
+	for i in range(TOTAL):
+		ages[i] = 1 if cells[i] != 0 else 0
+		history[i] = 0.0
+	pattern_snapshots.clear()
+	oscillator_tracks.clear()
+	explosion_queue.clear()
+	for i in range(TOTAL):
+		explosion_cooldowns[i] = 0
+	refresh_population()
+	return true
 
 func contract_hud_text() -> String:
 	if contract_index >= CONTRACTS.size():
@@ -894,6 +1144,8 @@ func contract_hud_text() -> String:
 			progress = "%d/3 species" % ok
 		"tools":
 			progress = "%d/%d" % [mini(tools_used.size(), target), target]
+		"journal":
+			progress = "%d/%d" % [mini(discoveries.size(), target), target]
 		"pop":
 			progress = "%d/%d" % [mini(max_population, target), target]
 		"gen300":

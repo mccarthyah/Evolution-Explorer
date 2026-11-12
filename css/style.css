@@ -42,4 +42,23 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 @keyframes toast-in{from{opacity:0;transform:translateY(12px) scale(.95)}to{opacity:1;transform:none}}
 .icon-btn{position:absolute;top:16px;right:16px;width:40px;height:40px;border-radius:10px;background:var(--panel);border:1px solid var(--panel-border);color:var(--text);font-size:17px;cursor:pointer;pointer-events:auto}
 .icon-btn:hover{border-color:var(--cyan)}
-@media (max-width:700px){#stats{font-size:12px}#hint{font-size:10.5px}}
+
+/* Field journal */
+.journal{position:absolute;top:66px;right:16px;width:270px;max-height:calc(100% - 90px);overflow-y:auto;background:var(--panel);border:1px solid var(--panel-border);border-radius:12px;padding:12px 14px;backdrop-filter:blur(6px)}
+.journal h3{font-size:13px;letter-spacing:1px;color:var(--amber);margin-bottom:8px}
+.j-found{font-size:12.5px;color:#d7ffe3;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.j-missing{font-size:12.5px;color:#566083;padding:3px 0;border-bottom:1px solid rgba(255,255,255,.05)}
+.j-found span,.j-missing span{float:right;font-size:10.5px;color:#8b93b8;margin-left:8px}
+
+/* Modals */
+.modal{position:fixed;inset:0;display:flex;align-items:center;justify-content:center;background:rgba(3,4,12,.7);backdrop-filter:blur(4px);z-index:70;padding:16px}
+.modal-card{background:linear-gradient(160deg,rgba(18,22,48,.97),rgba(8,10,24,.98));border:1px solid var(--panel-border);border-radius:16px;padding:22px 24px;max-width:560px;width:100%;box-shadow:0 30px 80px rgba(0,0,0,.6)}
+.modal-card h2{font-size:20px;margin-bottom:6px}
+.modal-note{color:var(--dim);font-size:12.5px;margin-bottom:12px}
+.modal-card textarea{width:100%;height:110px;background:#080b18;color:#cfe3ff;border:1px solid var(--panel-border);border-radius:8px;padding:10px;font-family:ui-monospace,Consolas,monospace;font-size:11px;resize:none;outline:none}
+.modal-card textarea:focus{border-color:var(--cyan)}
+.modal-row{display:flex;gap:10px;margin-top:12px}
+.modal-btn{flex:0 0 auto;background:var(--panel);border:1px solid var(--panel-border);color:var(--text);font-family:var(--font);font-size:13.5px;font-weight:700;padding:9px 20px;border-radius:999px;cursor:pointer}
+.modal-btn:hover{border-color:var(--cyan)}
+.modal-btn.primary{background:linear-gradient(90deg,#0891b2,var(--cyan));border:none}
+@media (max-width:700px){#stats{font-size:12px}#hint{font-size:10.5px}.journal{width:210px}}

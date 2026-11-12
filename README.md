@@ -2,7 +2,7 @@
 
 **Fly through pillars grown by Conway's Game of Life. Garden it.**
 
-Towers **explode at age 40** — harvest the gold ⚡ **biomass** they leave behind and spend it on seed tools: gliders, pulsars, glider guns, stasis fields. Complete **8 contracts** to become Master Gardener.
+Towers **explode at age 40** — harvest the gold ⚡ **biomass** they leave behind and spend it on seed tools: gliders, pulsars, glider guns, stasis fields. **Discover and catalog 12 named lifeforms** in your field journal. Complete **9 contracts** to become Master Gardener.
 
 ![Godot](https://img.shields.io/badge/Godot-4.7-478cbf) ![Web](https://img.shields.io/badge/Web-Play%20now-22d3ee) ![Three.js](https://img.shields.io/badge/Three.js-r160-e879f9)
 
@@ -52,7 +52,24 @@ A 48×48 Conway B3/S23 world with **3 species** (cyan / magenta / green). Newbor
 | `8` | Stasis Field | 15⚡ | Freezes aging in a radius-5 bubble for 30 generations — protect towers or delay a detonation |
 | `9` | Glider Gun | 60⚡ | The Gosper gun — endless gliders until it ages out |
 
-- **Contracts** (sequential, shown in the HUD): harvest biomass → seed by hand → witness detonations → balance all 3 species → use 3 tools → reach 400 population → reach generation 300 → **Master Gardener** (gen 600, 300 alive, 100⚡ harvested). Each pays a biomass bonus.
+- **Contracts** (sequential, shown in the HUD): harvest biomass → seed by hand → witness detonations → balance all 3 species → use 3 tools → **discover 6 lifeforms** → reach 400 population → reach generation 300 → **Master Gardener** (gen 600, 300 alive, 100⚡ harvested). Each pays a biomass bonus.
+
+### 🔬 Field journal
+
+The game **recognizes what your ecosystem grows**. Each connected pattern is shape-matched (all rotations & mirrors) against a library of famous lifeforms — discover one and it's journaled forever, with a **+10⚡ bonus**:
+
+Block · Tub · Boat · Beehive · Loaf · Blinker · Toad · Beacon · Glider · Lightweight Ship · Pulsar · Glider Gun
+
+Press `J` to open the journal. Explosions scatter gliders and blocks as debris, so even a dead world re-seeds discoveries.
+
+### 💾 Save & share ecosystems
+
+Press `S` for a compact **EVO1 code** (run-length encoded, species included) — web copies it to your clipboard with a share modal; Godot puts it on the clipboard directly. Anyone can press `L` and paste it to take over your exact world.
+
+### ✨ Atmosphere
+
+- **Bloom** (`B`) — neon glow post-processing (UnrealBloom on web, WorldEnvironment glow in Godot)
+- **Day/night cycle** (`T`) — 150-second loop; the world dims, stars brighten, and the drone shifts key with the ecosystem's health (web)
 
 ## 🎮 Controls
 
@@ -71,6 +88,10 @@ A 48×48 Conway B3/S23 world with **3 species** (cyan / magenta / green). Newbor
 | Sim speed | `[` / `]` |
 | Height scale | `-` / `=` |
 | Terrain memory | `M` |
+| Field journal | `J` |
+| Save / load ecosystem code | `S` / `L` |
+| Bloom toggle | `B` |
+| Day/night cycle | `T` |
 | Quit (Godot) / pause (web) | `Esc` |
 
 ## 📁 Project structure
@@ -89,8 +110,9 @@ Evolution-Explorer/
 
 ## 🔧 Tech notes
 
-- **Godot:** GDScript + `MultiMeshInstance3D` (one draw call for 2,304 pillars), unshaded flat-neon material, expanding blast spheres, `CPUParticles3D` bursts, biomass orbs + stasis bubbles as pooled nodes, camera shake. No addons, no external assets.
-- **Web:** vanilla JS + Three.js `InstancedMesh`, arrow-key free-fly, centre/click ground painting, WebAudio pops/blips/fanfares, pooled orbs & blast rings. Same simulation, instability, and economy rules as `main.gd`.
+- **Godot:** GDScript + `MultiMeshInstance3D` (one draw call for 2,304 pillars), unshaded flat-neon material, expanding blast spheres, `CPUParticles3D` bursts, biomass orbs + stasis bubbles as pooled nodes, camera shake, WorldEnvironment glow, clipboard ecosystem codes. No addons, no external assets.
+- **Web:** vanilla JS + Three.js `InstancedMesh`, UnrealBloom post-processing (vendored, offline), arrow-key free-fly, centre/click ground painting, WebAudio pops/blips/fanfares + an ambient drone that tracks ecosystem health, pooled orbs & blast rings, save/load modals. Same simulation, instability, economy, journal, and day/night rules as `main.gd`.
+- Journal matching: connected components are signature-matched against 12 lifeforms in all 4 rotations + mirrors (53 distinct signatures); beacon uses its 8-cell phase because the 6-cell phase splits into two disconnected triominoes.
 - Oscillator detection: board snapshots (last 7) + connected-component footprints; a pattern must repeat exactly at lag 2–6 (and differ at lag 1) for 12 cycles.
 
 ---

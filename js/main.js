@@ -8,6 +8,9 @@
    seed tools (4-9), complete contracts. Free-fly + F/G painting.
    ════════════════════════════════════════════════════════════════ */
 import * as THREE from 'three';
+import { EffectComposer } from '../lib/postprocessing/EffectComposer.js';
+import { RenderPass } from '../lib/postprocessing/RenderPass.js';
+import { UnrealBloomPass } from '../lib/postprocessing/UnrealBloomPass.js';
 
 /* ─────────────────────────── CONFIG ─────────────────────────── */
 const GRID = 48, TOTAL = GRID * GRID, SPACING = 1.15;
@@ -67,10 +70,49 @@ const CONTRACTS = [
   { id: 'explode', text: 'Witness 3 detonations', target: 3, reward: 20 },
   { id: 'balance', text: 'Grow 40+ living cells of all 3 species', target: 3, reward: 25 },
   { id: 'tools', text: 'Use 3 different seed tools', target: 3, reward: 25 },
+  { id: 'journal', text: 'Discover 6 lifeforms (J for journal)', target: 6, reward: 30 },
   { id: 'pop', text: 'Grow the population to 400', target: 400, reward: 30 },
   { id: 'gen300', text: 'Sustain the world to generation 300', target: 300, reward: 40 },
   { id: 'master', text: 'MASTER GARDENER: gen 600, 300 alive, 100 biomass', target: 3, reward: 100 },
 ];
+
+/* Field journal: named lifeforms, matched by shape signature (all 4 rotations + mirrors) */
+const JOURNAL = [
+  { name: 'Block', rows: ['OO', 'OO'], desc: 'still life' },
+  { name: 'Tub', rows: ['.O.', 'O.O', '.O.'], desc: 'still life' },
+  { name: 'Boat', rows: ['OO.', 'O.O'], desc: 'still life' },
+  { name: 'Beehive', rows: ['.OO.', 'O..O', '.OO.'], desc: 'still life' },
+  { name: 'Loaf', rows: ['.OO.', 'O..O', '.O.O', '.O..'], desc: 'still life' },
+  { name: 'Blinker', rows: ['OOO'], desc: 'oscillator, period 2' },
+  { name: 'Toad', rows: ['.OOO', 'OOO.'], desc: 'oscillator, period 2' },
+  { name: 'Beacon', rows: ['OO..', 'OO..', '..OO', '..OO'], desc: 'oscillator, period 2' },
+  { name: 'Glider', rows: ['.O.', '..O', 'OOO'], desc: 'spaceship, c/4 diagonal' },
+  { name: 'Lightweight Ship', rows: ['.O..O', 'O....', 'O...O', 'OOOO.'], desc: 'spaceship, c/2 orthogonal' },
+  { name: 'Pulsar', rows: PULSAR_ROWS, desc: 'oscillator, period 3' },
+  { name: 'Glider Gun', rows: GUN_ROWS, desc: 'Gosper gun — endless gliders' },
+];
+const SIG_MAP = (() => {
+  const pts = rows => { const a = []; for (let r = 0; r < rows.length; r++) for (let c = 0; c < rows[r].length; c++) if (rows[r][c] !== '.') a.push([c, r]); return a; };
+  const sig = p => { const mx = Math.min(...p.map(q => q[0])), mz = Math.min(...p.map(q => q[1])); return p.map(q => [q[0] - mx, q[1] - mz]).sort((a, b) => a[1] - b[1] || a[0] - b[0]).map(q => q.join(',')).join(';'); };
+  const rot = rows => { const R = rows.length, C = rows[0].length; const out = Array.from({ length: C }, () => Array(R).fill('.')); for (let r = 0; r < R; r++) for (let c = 0; c < C; c++) out[c][R - 1 - r] = rows[r][c]; return out.map(a => a.join('')); };
+  const mir = rows => rows.map(r => r.split('').reverse().join(''));
+  const map = new Map();
+  for (const p of JOURNAL) {
+    const variants = [p.rows];
+    for (let i = 0; i < 3; i++) variants.push(rot(variants[variants.length - 1]));
+    variants.push(mir(p.rows));
+    for (let i = 0; i < 3; i++) variants.push(rot(variants[variants.length - 1]));
+    const seen = new Set();
+    for (const v of variants) {
+      const key = v.join('|');
+      if (seen.has(key)) continue;
+      seen.add(key);
+      const s = sig(pts(v));
+      if (!map.has(s)) map.set(s, p.name);
+    }
+  }
+  return map;
+})();
 
 const $ = id => document.getElementById(id);
 const canvas = $('game-canvas');
@@ -89,6 +131,15 @@ let shake = 0;
 /* Gardener economy */
 let biomass = 0, biomassCollectedTotal = 0, paintedCells = 0, maxPopulation = 0;
 let toolsUsed = new Set(), contractIndex = 0, lastOrbToastAt = 0;
+let discoveries = new Set();
+
+/* Day/night + bloom */
+let dayNightEnabled = true, dayTime = 0, worldBrightness = 1;
+const DAY_LENGTH = 150;
+const BASE_BG = new THREE.Color(0.009, 0.014, 0.034);
+const BASE_FLOOR = new THREE.Color(0.025, 0.045, 0.085);
+let bloomEnabled = true;
+let starsMat = null;
 
 /* ─────────────────────────── AUDIO (light) ──────────────────── */
 const AudioSys = {
@@ -136,6 +187,12 @@ camera.rotation.order = 'YXZ';
 camera.position.set(0, 16, 32);
 let yaw = 0, pitch = -0.30;
 
+/* Bloom post-processing (toggle B) */
+const composer = new EffectComposer(renderer);
+composer.addPass(new RenderPass(scene, camera));
+const bloomPass = new UnrealBloomPass(new THREE.Vector2(window.innerWidth, window.innerHeight), 0.55, 0.7, 0.45);
+composer.addPass(bloomPass);
+
 scene.add(new THREE.AmbientLight(new THREE.Color(0.25, 0.33, 0.52), 1.4));
 const sun = new THREE.DirectionalLight(0xffffff, 1.6);
 sun.position.set(-30, 50, 20); scene.add(sun);
@@ -158,7 +215,8 @@ floorMesh.position.y = -0.20; scene.add(floorMesh);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 1.2, vertexColors: true, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false })));
+  starsMat = new THREE.PointsMaterial({ size: 1.2, vertexColors: true, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false });
+  scene.add(new THREE.Points(g, starsMat));
 }
 
 /* Pillars — unshaded (flat neon, mirrors Godot) */
@@ -387,6 +445,12 @@ function updateInstability() {
     processed++;
   }
 }
+function componentSignature(component) {
+  let mx = GRID, mz = GRID;
+  for (const id of component) { mx = Math.min(mx, id % GRID); mz = Math.min(mz, Math.floor(id / GRID)); }
+  return component.map(id => [(id % GRID) - mx, Math.floor(id / GRID) - mz])
+    .sort((a, b) => a[1] - b[1] || a[0] - b[0]).map(p => p.join(',')).join(';');
+}
 function findOscillators() {
   const seen = new Uint8Array(TOTAL);
   const updated = new Map();
@@ -409,6 +473,16 @@ function findOscillators() {
       }
     }
     if (component.length < 2 || component.length > OSCILLATOR_MAX_CELLS) continue;
+    /* Field journal discovery */
+    const jsig = componentSignature(component);
+    const jname = SIG_MAP.get(jsig);
+    if (jname && !discoveries.has(jname)) {
+      discoveries.add(jname);
+      biomass += 10; biomassCollectedTotal += 10;
+      AudioSys.fanfare();
+      toast(`🔬 <b>DISCOVERED: ${jname}</b> (+10 ⚡)`, 4000, 'gold');
+      refreshJournal();
+    }
     let minX = GRID, minZ = GRID, maxX = 0, maxZ = 0;
     for (const id of component) {
       minX = Math.min(minX, id % GRID); maxX = Math.max(maxX, id % GRID);
@@ -521,6 +595,7 @@ function updateVisuals(dt) {
       _c.copy(PALETTE[living - 1]).lerp(ORANGE, ageFactor * 0.55);
       if (ages[i] >= TOWER_LIFESPAN - 8) _c.lerp(REDHOT, 0.65 + 0.35 * Math.sin(generations * 2.0));
     } else _c.copy(GHOST_A).lerp(GHOST_B, mem);
+    _c.multiplyScalar(worldBrightness);
     pillarsMesh.setColorAt(i, _c);
   }
   pillarsMesh.instanceMatrix.needsUpdate = true;
@@ -651,6 +726,7 @@ function contractDone(c) {
     case 'explode': return explosionsTotal >= c.target;
     case 'balance': return speciesCounts().filter(n => n >= 40).length >= c.target;
     case 'tools': return toolsUsed.size >= c.target;
+    case 'journal': return discoveries.size >= c.target;
     case 'pop': return maxPopulation >= c.target;
     case 'gen300': return generations >= c.target;
     case 'master':
@@ -665,6 +741,7 @@ function contractProgress(c) {
     case 'explode': return `${Math.min(explosionsTotal, c.target)}/${c.target}`;
     case 'balance': return `${speciesCounts().filter(n => n >= 40).length}/3 species`;
     case 'tools': return `${Math.min(toolsUsed.size, c.target)}/${c.target}`;
+    case 'journal': return `${Math.min(discoveries.size, c.target)}/${c.target}`;
     case 'pop': return `${Math.min(maxPopulation, c.target)}/${c.target}`;
     case 'gen300': return `${Math.min(generations, c.target)}/${c.target}`;
     case 'master':
@@ -713,6 +790,11 @@ window.addEventListener('keydown', e => {
   else if (k === 'f') paintAt(window.innerWidth / 2, window.innerHeight / 2, true);
   else if (k === 'g') paintAt(window.innerWidth / 2, window.innerHeight / 2, false);
   else if (TOOLS[k]) useTool(k);
+  else if (k === 'b') { bloomEnabled = !bloomEnabled; toast(`✨ Bloom ${bloomEnabled ? 'ON' : 'OFF'}`, 1500); }
+  else if (k === 't') { dayNightEnabled = !dayNightEnabled; toast(`🌗 Day/night cycle ${dayNightEnabled ? 'ON' : 'OFF'}`, 1500); }
+  else if (k === 'j') { $('journal').classList.toggle('hidden'); refreshJournal(); }
+  else if (k === 's') openSaveModal();
+  else if (k === 'l') openLoadModal();
 });
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 function toggleOverview() {
@@ -731,8 +813,119 @@ function toast(html, dur = 3000, cls = '') {
 function updateHUD() {
   const mode = overview ? 'OVERVIEW' : 'FLIGHT';
   $('stats').textContent =
-    `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}\nExplosions ${explosionsTotal}  |  Last ${lastExplosion}\n⚡ Biomass ${biomass}   |   Contract ${contractHudText()}`;
+    `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}\nExplosions ${explosionsTotal}  |  Last ${lastExplosion}\n⚡ Biomass ${biomass}   |   🔬 ${discoveries.size}/${JOURNAL.length}   |   Contract ${contractHudText()}`;
 }
+function refreshJournal() {
+  const el = $('journal');
+  if (!el) return;
+  let html = `<h3>🔬 FIELD JOURNAL &nbsp;${discoveries.size}/${JOURNAL.length}</h3>`;
+  for (const p of JOURNAL) html += `<div class="${discoveries.has(p.name) ? 'j-found' : 'j-missing'}">${discoveries.has(p.name) ? '✔' : '·'} ${p.name}<span>${p.desc}</span></div>`;
+  el.innerHTML = html;
+}
+
+/* ── Day/night cycle ── */
+function updateDayNight(dt) {
+  if (dayNightEnabled) {
+    dayTime += dt;
+    const phase = (dayTime / DAY_LENGTH) % 1;
+    worldBrightness = 0.72 + 0.28 * (0.5 + 0.5 * Math.sin(phase * Math.PI * 2 - Math.PI * 0.5));
+  } else worldBrightness = 1;
+  scene.background.copy(BASE_BG).multiplyScalar(worldBrightness);
+  scene.fog.color.copy(scene.background);
+  floorMesh.material.color.copy(BASE_FLOOR).multiplyScalar(worldBrightness);
+  sun.intensity = 1.6 * worldBrightness;
+  if (starsMat) starsMat.opacity = 0.35 + (1.05 - worldBrightness);
+}
+
+/* ── Ambient drone (health of the world sets the key) ── */
+const Drone = {
+  nodes: null, nextUpdate: 0,
+  start() {
+    if (this.nodes || !AudioSys.ctx) return;
+    const ctx = AudioSys.ctx;
+    const gain = ctx.createGain(); gain.gain.value = 0;
+    gain.gain.linearRampToValueAtTime(0.05, ctx.currentTime + 3);
+    const filter = ctx.createBiquadFilter(); filter.type = 'lowpass'; filter.frequency.value = 220;
+    const o1 = ctx.createOscillator(); o1.type = 'sawtooth'; o1.frequency.value = 55;
+    const o2 = ctx.createOscillator(); o2.type = 'sine'; o2.frequency.value = 82.5;
+    o1.connect(filter); o2.connect(filter); filter.connect(gain); gain.connect(AudioSys.master);
+    o1.start(); o2.start();
+    this.nodes = { gain, filter, o1, o2 };
+  },
+  update() {
+    if (!this.nodes || !AudioSys.ctx) return;
+    const now = performance.now();
+    if (now < this.nextUpdate) return;
+    this.nextUpdate = now + 1500;
+    const health = Math.min(1, population / 600);
+    const root = 48 + 36 * health;
+    const t = AudioSys.ctx.currentTime;
+    this.nodes.o1.frequency.linearRampToValueAtTime(root, t + 1.2);
+    this.nodes.o2.frequency.linearRampToValueAtTime(root * 1.5, t + 1.2);
+    this.nodes.filter.frequency.linearRampToValueAtTime(160 + 240 * health, t + 1.2);
+  },
+};
+
+/* ── Ecosystem save/share (EVO1 run-length codes) ── */
+function encodeEcosystem() {
+  const rowsRLE = [];
+  for (let z = 0; z < GRID; z++) {
+    let s = '', run = 0, val = -1;
+    for (let x = 0; x < GRID; x++) {
+      const v = cells[idxOf(x, z)];
+      if (v === val) run++;
+      else { if (val >= 0) s += '.abc'[val] + run; val = v; run = 1; }
+    }
+    s += '.abc'[val] + run;
+    rowsRLE.push(s);
+  }
+  return `EVO1;${GRID};` + rowsRLE.join('/');
+}
+function decodeEcosystem(code) {
+  const parts = code.trim().split(';');
+  if (parts.length !== 3 || parts[0] !== 'EVO1') return null;
+  if (parseInt(parts[1], 10) !== GRID) return null;
+  const rows = parts[2].split('/');
+  if (rows.length !== GRID) return null;
+  const out = new Uint8Array(TOTAL);
+  for (let z = 0; z < GRID; z++) {
+    let x = 0;
+    const row = rows[z];
+    for (let p = 0; p < row.length;) {
+      const v = '.abc'.indexOf(row[p]);
+      if (v < 0) return null;
+      p++;
+      let num = '';
+      while (p < row.length && row[p] >= '0' && row[p] <= '9') { num += row[p]; p++; }
+      const n = parseInt(num, 10);
+      if (!n || x + n > GRID) return null;
+      for (let k = 0; k < n; k++) out[idxOf(x++, z)] = v;
+    }
+    if (x !== GRID) return null;
+  }
+  return out;
+}
+function openSaveModal() { $('save-area').value = encodeEcosystem(); $('save-modal').classList.remove('hidden'); $('save-area').select(); }
+function openLoadModal() { $('load-area').value = ''; $('load-modal').classList.remove('hidden'); $('load-area').focus(); }
+function loadFromModal() {
+  const arr = decodeEcosystem($('load-area').value);
+  if (!arr) { AudioSys.err(); toast('❌ Invalid ecosystem code (expected EVO1)', 2500, 'err'); return; }
+  cells = arr; ages.fill(0); history.fill(0);
+  for (let i = 0; i < TOTAL; i++) if (cells[i]) ages[i] = 1;
+  snapshots = []; tracks = new Map(); queue = []; cooldowns.fill(0); warnings.fill(0);
+  refreshPopulation();
+  $('load-modal').classList.add('hidden');
+  AudioSys.buy();
+  toast('🧬 Ecosystem loaded from code', 2200, 'gold');
+}
+$('save-copy-btn').addEventListener('click', async () => {
+  const ta = $('save-area');
+  try { await navigator.clipboard.writeText(ta.value); toast('📋 Copied to clipboard', 1800); }
+  catch (e) { ta.select(); try { document.execCommand('copy'); toast('📋 Copied', 1800); } catch (e2) { toast('📋 Select the code and press Ctrl+C', 2600); } }
+});
+$('save-close-btn').addEventListener('click', () => $('save-modal').classList.add('hidden'));
+$('load-go-btn').addEventListener('click', loadFromModal);
+$('load-close-btn').addEventListener('click', () => $('load-modal').classList.add('hidden'));
 $('sound-btn').addEventListener('click', () => {
   AudioSys.init();
   AudioSys.setMuted(!AudioSys.muted);
@@ -740,16 +933,20 @@ $('sound-btn').addEventListener('click', () => {
 });
 $('play-btn').addEventListener('click', () => {
   AudioSys.init();
+  Drone.start();
   started = true;
   $('start-screen').classList.add('hidden');
   $('hud').classList.remove('hidden');
+  refreshJournal();
   toast('🧬 Welcome, Gardener. Harvest gold orbs at blast sites to earn ⚡ biomass.', 4500);
   toast('Contracts pay bonuses. Tools are on keys 4–9 (aim at the ground).', 4500);
+  toast('🔬 J journal · S/L save & share ecosystems · B bloom · T day/night', 5000);
 });
 
 /* ─────────────────────────── MAIN LOOP ──────────────────────── */
 function resize() {
   renderer.setSize(window.innerWidth, window.innerHeight, false);
+  composer.setSize(window.innerWidth, window.innerHeight);
   camera.aspect = window.innerWidth / window.innerHeight;
   camera.updateProjectionMatrix();
 }
@@ -786,12 +983,14 @@ function loop() {
   updateParticles(dt);
   updateBlasts(dt);
   updateOrbs(dt, nowMs);
+  updateDayNight(dt);
+  Drone.update();
   for (let b = blasts.length - 1; b >= 0; b--) {
     blasts[b].ttl -= dt;
     if (blasts[b].ttl <= 0) blasts.splice(b, 1);
   }
   hudTimer += dt; if (hudTimer > 0.12) { hudTimer = 0; if (started) updateHUD(); }
-  renderer.render(scene, camera);
+  if (bloomEnabled) composer.render(); else renderer.render(scene, camera);
 }
 
 /* ─────────────────────────── BOOT ───────────────────────────── */
