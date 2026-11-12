@@ -1,18 +1,25 @@
 /* ════════════════════════════════════════════════════════════════
-   EVOLUTION — Living Terrain (web version)
+   EVOLUTION — Living Terrain (web version, mirrors main.gd)
    Conway B3/S23, 3 species, age-height + terrain memory.
-   Cells explode at MAX_AGE; stagnant/repeating patterns detonate.
-   Free-fly camera with pointer-lock mouse look + ground painting.
-   Mirrors the Godot original (main.gd) + explosion systems.
+   Cellular Instability: towers explode at age 40 (radius-4 craters,
+   chain reactions, debris seeding); oscillators (periods 2-6)
+   detonate after 12 cycles. Free-fly + F/G centre painting.
    ════════════════════════════════════════════════════════════════ */
 import * as THREE from 'three';
 
 /* ─────────────────────────── CONFIG ─────────────────────────── */
-const GRID = 80, TOTAL = GRID * GRID, SPACING = 1.15;
+const GRID = 48, TOTAL = GRID * GRID, SPACING = 1.15;
 const MAX_AGE = 65, HISTORY_LIMIT = 1.0;
 const PALETTE = [new THREE.Color(0.15, 0.93, 1.0), new THREE.Color(1.0, 0.24, 0.72), new THREE.Color(0.54, 1.0, 0.38)];
 const ORANGE = new THREE.Color(1.0, 0.52, 0.26);
+const REDHOT = new THREE.Color(1.0, 0.16, 0.04);
 const GHOST_A = new THREE.Color(0.06, 0.14, 0.26), GHOST_B = new THREE.Color(0.19, 0.26, 0.42);
+
+/* Cellular Instability (mirrors main.gd) */
+const TOWER_LIFESPAN = 40, OSCILLATOR_CYCLES = 12, EXPLOSION_RADIUS = 4;
+const MAX_EXPLOSIONS_PER_GEN = 3, EXPLOSION_COOLDOWN = 12;
+const OSCILLATOR_MAX_CELLS = 64, MAX_DEBRIS_SEEDS = 12;
+const VISUAL_INTERVAL = 1 / 20;
 
 const $ = id => document.getElementById(id);
 const canvas = $('game-canvas');
@@ -20,16 +27,16 @@ const canvas = $('game-canvas');
 /* ─────────────────────────── STATE ──────────────────────────── */
 let cells = new Uint8Array(TOTAL), nextCells = new Uint8Array(TOTAL);
 let ages = new Uint16Array(TOTAL), history = new Float32Array(TOTAL), heights = new Float32Array(TOTAL);
+let cooldowns = new Int32Array(TOTAL), warnings = new Int32Array(TOTAL);
 let generations = 0, population = 0, running = true, memoryEnabled = true;
-let generationInterval = 0.22, heightScale = 1.0, accumulated = 0;
-let overview = false, mouseCaptured = false, brushSpecies = 1;
-let explosionsEnabled = true, explosions = 0;
-let hashHistory = [];
-let started = false;
+let generationInterval = 0.35, heightScale = 1.0, accumulated = 0, visualElapsed = 0;
+let overview = false, brushSpecies = 1, started = false;
+let snapshots = [], tracks = new Map(), queue = [], blasts = [];
+let explosionsTotal = 0, lastExplosion = 'NONE', lastToastAt = 0;
 
 /* ─────────────────────────── AUDIO (light) ──────────────────── */
 const AudioSys = {
-  ctx: null, master: null, muted: false,
+  ctx: null, master: null, muted: false, lastPop: 0,
   init() {
     if (this.ctx) { if (this.ctx.state === 'suspended') this.ctx.resume(); return; }
     try {
@@ -40,6 +47,7 @@ const AudioSys = {
   },
   pop(big = false) {
     if (!this.ctx || this.muted) return;
+    const now = performance.now(); if (now - this.lastPop < 90) return; this.lastPop = now;
     const t = this.ctx.currentTime, dur = big ? 0.5 : 0.22;
     const o = this.ctx.createOscillator(), g = this.ctx.createGain();
     o.type = 'sine'; o.frequency.setValueAtTime(big ? 220 : 380, t);
@@ -62,7 +70,7 @@ scene.fog = new THREE.FogExp2(0x05060f, 0.006);
 
 const camera = new THREE.PerspectiveCamera(78, 1, 0.1, 650);
 camera.rotation.order = 'YXZ';
-camera.position.set(0, 16, 40);
+camera.position.set(0, 16, 32);
 let yaw = 0, pitch = -0.30;
 
 scene.add(new THREE.AmbientLight(new THREE.Color(0.25, 0.33, 0.52), 1.4));
@@ -87,13 +95,12 @@ floorMesh.position.y = -0.20; scene.add(floorMesh);
   const g = new THREE.BufferGeometry();
   g.setAttribute('position', new THREE.BufferAttribute(pos, 3));
   g.setAttribute('color', new THREE.BufferAttribute(col, 3));
-  const stars = new THREE.Points(g, new THREE.PointsMaterial({ size: 1.2, vertexColors: true, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false }));
-  stars.position.set(0, 0, 0); scene.add(stars);
+  scene.add(new THREE.Points(g, new THREE.PointsMaterial({ size: 1.2, vertexColors: true, transparent: true, opacity: 0.8, blending: THREE.AdditiveBlending, depthWrite: false })));
 }
 
-/* Pillars */
+/* Pillars — unshaded (flat neon, mirrors Godot) */
 const pillarGeo = new THREE.BoxGeometry(0.91, 1, 0.91);
-const pillarMat = new THREE.MeshStandardMaterial({ roughness: 0.26, metalness: 0.18 });
+const pillarMat = new THREE.MeshBasicMaterial({});
 const pillarsMesh = new THREE.InstancedMesh(pillarGeo, pillarMat, TOTAL);
 pillarsMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
 pillarsMesh.frustumCulled = false;
@@ -101,7 +108,7 @@ scene.add(pillarsMesh);
 { const c = new THREE.Color(0xffffff); for (let i = 0; i < TOTAL; i++) pillarsMesh.setColorAt(i, c); }
 
 /* Particles */
-const P_MAX = 1800;
+const P_MAX = 2000;
 const pPos = new Float32Array(P_MAX * 3), pCol = new Float32Array(P_MAX * 3);
 const pVel = new Float32Array(P_MAX * 3), pLife = new Float32Array(P_MAX), pMaxLife = new Float32Array(P_MAX);
 const pBaseCol = new Float32Array(P_MAX * 3);
@@ -113,7 +120,7 @@ const particles = new THREE.Points(pGeo, new THREE.PointsMaterial({ size: 0.45, 
 particles.frustumCulled = false; scene.add(particles);
 for (let i = 0; i < P_MAX; i++) pPos[i * 3 + 1] = -9999;
 const _pc = new THREE.Color();
-function spawnParticles(wx, wy, wz, color, count, speed = 5, life = 0.8) {
+function spawnParticles(wx, wy, wz, color, count, speed = 6, life = 0.8) {
   _pc.copy(color);
   for (let n = 0; n < count; n++) {
     const i = pCursor; pCursor = (pCursor + 1) % P_MAX;
@@ -136,16 +143,44 @@ function updateParticles(dt) {
   pGeo.attributes.position.needsUpdate = true;
   pGeo.attributes.color.needsUpdate = true;
 }
-function cellWorldPos(i) {
-  const x = i % GRID, z = Math.floor(i / GRID);
-  return new THREE.Vector3((x - (GRID - 1) / 2) * SPACING, 4, (z - (GRID - 1) / 2) * SPACING);
+
+/* Blast rings (expanding spheres, mirrors Godot blast nodes) */
+const blastPool = [];
+{
+  const geo = new THREE.SphereGeometry(1, 24, 12);
+  for (let i = 0; i < 16; i++) {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: new THREE.Color(1.0, 0.55, 0.15), transparent: true, opacity: 0, depthWrite: false }));
+    m.visible = false; scene.add(m);
+    blastPool.push({ mesh: m, ttl: 0 });
+  }
 }
+function spawnBlastRing(wx, wz) {
+  const b = blastPool.find(b => b.ttl <= 0); if (!b) return;
+  b.ttl = 0.65;
+  b.mesh.visible = true;
+  b.mesh.position.set(wx, 3, wz);
+  b.mesh.scale.set(1, 1, 1);
+}
+function updateBlasts(dt) {
+  for (const b of blastPool) {
+    if (b.ttl <= 0) continue;
+    b.ttl -= dt;
+    if (b.ttl <= 0) { b.mesh.visible = false; b.mesh.material.opacity = 0; continue; }
+    const life = 1 - b.ttl / 0.65, s = 1 + life * 12;
+    b.mesh.scale.set(s, s * 0.7, s);
+    b.mesh.material.opacity = 0.55 * (b.ttl / 0.65);
+  }
+}
+const cellWorld = (x, z) => ({ x: (x - (GRID - 1) / 2) * SPACING, z: (z - (GRID - 1) / 2) * SPACING });
 
 /* ─────────────────────────── SIMULATION ─────────────────────── */
 const idxOf = (x, z) => z * GRID + x;
 function refreshPopulation() { let p = 0; for (let i = 0; i < TOTAL; i++) if (cells[i]) p++; population = p; }
 function seedWorld() {
   cells.fill(0); ages.fill(0); history.fill(0); heights.fill(0);
+  cooldowns.fill(0); warnings.fill(0);
+  snapshots = []; tracks = new Map(); queue = []; blasts = [];
+  explosionsTotal = 0; lastExplosion = 'NONE';
   for (let k = 0; k < 17; k++) {
     const cx = 6 + Math.floor(Math.random() * (GRID - 12));
     const cz = 6 + Math.floor(Math.random() * (GRID - 12));
@@ -156,13 +191,8 @@ function seedWorld() {
         if (Math.hypot(x - cx, z - cz) < radius && Math.random() < 0.37) cells[idxOf(x, z)] = species;
       }
   }
-  generations = 0; explosions = 0; hashHistory = [];
+  generations = 0;
   refreshPopulation();
-}
-function hashCells() {
-  let h = 2166136261;
-  for (let i = 0; i < TOTAL; i++) { h ^= cells[i]; h = Math.imul(h, 16777619); }
-  return h >>> 0;
 }
 function stepSimulation() {
   for (let z = 0; z < GRID; z++) for (let x = 0; x < GRID; x++) {
@@ -195,37 +225,139 @@ function stepSimulation() {
     }
   }
   generations++;
-  /* Age explosions */
-  if (explosionsEnabled) {
-    let bursts = 0;
-    for (let i = 0; i < TOTAL; i++) {
-      if (cells[i] !== 0 && ages[i] >= MAX_AGE) {
-        cells[i] = 0; ages[i] = 0; explosions++;
-        if (bursts < 10) { const p = cellWorldPos(i); spawnParticles(p.x, p.y, p.z, new THREE.Color(1.0, 0.85, 0.4), 14, 5, 0.8); bursts++; }
-      }
-    }
-    if (bursts > 0) AudioSys.pop(false);
-  }
-  /* Stagnation / repeat detection */
-  const h = hashCells();
-  const repeated = hashHistory.includes(h);
-  hashHistory.push(h); if (hashHistory.length > 4) hashHistory.shift();
-  if (repeated && generations > 10 && population > 20 && explosionsEnabled) {
-    let count = 0, bursts = 0;
-    for (let i = 0; i < TOTAL; i++) {
-      if (cells[i] !== 0 && ages[i] >= 10) {
-        cells[i] = 0; ages[i] = 0; explosions++; count++;
-        if (bursts < 14) { const p = cellWorldPos(i); spawnParticles(p.x, p.y, p.z, new THREE.Color(1.0, 0.24, 0.72), 16, 6, 0.9); bursts++; }
-      }
-    }
-    if (count > 0) {
-      showWarn();
-      AudioSys.pop(true);
-      toast(`💥 <b>Stagnation!</b> ${count} pillars exploded — pattern was repeating.`, 3200);
-    }
-    hashHistory = [];
-  }
+  updateInstability();
   refreshPopulation();
+}
+
+/* ── Cellular Instability (mirrors main.gd) ── */
+function updateInstability() {
+  for (let i = 0; i < TOTAL; i++) {
+    if (cooldowns[i] > 0) cooldowns[i]--;
+    if (cells[i] !== 0 && ages[i] >= TOWER_LIFESPAN && cooldowns[i] === 0) {
+      queue.push([i % GRID, Math.floor(i / GRID)]);
+      cooldowns[i] = EXPLOSION_COOLDOWN;
+    }
+    if (cells[i] !== 0 && ages[i] >= TOWER_LIFESPAN - 8) warnings[i] = 8;
+    else if (warnings[i] > 0) warnings[i]--;
+  }
+  snapshots.push(new Uint8Array(cells));
+  if (snapshots.length > 7) snapshots.shift();
+  if (snapshots.length >= 3) findOscillators();
+  let processed = 0;
+  while (queue.length && processed < MAX_EXPLOSIONS_PER_GEN) {
+    const [cx, cz] = queue.shift();
+    if (cx < 0 || cx >= GRID || cz < 0 || cz >= GRID) continue;
+    detonate(cx, cz);
+    processed++;
+  }
+}
+function findOscillators() {
+  const seen = new Uint8Array(TOTAL);
+  const updated = new Map();
+  for (let start = 0; start < TOTAL; start++) {
+    if (cells[start] === 0 || seen[start]) continue;
+    const component = [];
+    const frontier = [start];
+    seen[start] = 1;
+    let head = 0;
+    while (head < frontier.length) {
+      const cur = frontier[head++];
+      component.push(cur);
+      const x = cur % GRID, z = Math.floor(cur / GRID);
+      for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+        if (!dx && !dz) continue;
+        const nx = x + dx, nz = z + dz;
+        if (nx < 0 || nx >= GRID || nz < 0 || nz >= GRID) continue;
+        const ni = idxOf(nx, nz);
+        if (cells[ni] !== 0 && !seen[ni]) { seen[ni] = 1; frontier.push(ni); }
+      }
+    }
+    if (component.length < 2 || component.length > OSCILLATOR_MAX_CELLS) continue;
+    let minX = GRID, minZ = GRID, maxX = 0, maxZ = 0;
+    for (const id of component) {
+      minX = Math.min(minX, id % GRID); maxX = Math.max(maxX, id % GRID);
+      minZ = Math.min(minZ, Math.floor(id / GRID)); maxZ = Math.max(maxZ, Math.floor(id / GRID));
+    }
+    minX = Math.max(0, minX - 1); minZ = Math.max(0, minZ - 1);
+    maxX = Math.min(GRID - 1, maxX + 1); maxZ = Math.min(GRID - 1, maxZ + 1);
+    const key = `${Math.floor((minX + maxX) / 2)}:${Math.floor((minZ + maxZ) / 2)}`;
+    let period = 0;
+    for (let lag = 2; lag <= Math.min(6, snapshots.length - 1); lag++) {
+      const prev = snapshots[snapshots.length - 1 - lag];
+      let identical = true;
+      outer: for (let z = minZ; z <= maxZ; z++) for (let x = minX; x <= maxX; x++) {
+        if ((prev[idxOf(x, z)] !== 0) !== (cells[idxOf(x, z)] !== 0)) { identical = false; break outer; }
+      }
+      if (identical) {
+        const prior = snapshots[snapshots.length - 2];
+        let changed = false;
+        for (const id of component) if ((prior[id] !== 0) !== (cells[id] !== 0)) { changed = true; break; }
+        if (changed) { period = lag; break; }
+      }
+    }
+    if (period === 0) continue;
+    let track = tracks.get(key) || { ticks: 0, period };
+    if (track.period !== period) track = { ticks: 0, period };
+    track.ticks++;
+    updated.set(key, track);
+    if (track.ticks >= OSCILLATOR_CYCLES * period) {
+      const cx = Math.floor((minX + maxX) / 2), cz = Math.floor((minZ + maxZ) / 2);
+      const ci = idxOf(cx, cz);
+      if (cooldowns[ci] === 0) {
+        queue.push([cx, cz]);
+        cooldowns[ci] = EXPLOSION_COOLDOWN;
+      }
+      updated.delete(key);
+    }
+  }
+  tracks = updated;
+}
+function detonate(cx, cz) {
+  const source = idxOf(cx, cz);
+  let species = cells[source];
+  if (species === 0) species = 1 + Math.floor(Math.random() * 3);
+  let destroyed = 0;
+  for (let z = Math.max(0, cz - EXPLOSION_RADIUS); z <= Math.min(GRID - 1, cz + EXPLOSION_RADIUS); z++)
+    for (let x = Math.max(0, cx - EXPLOSION_RADIUS); x <= Math.min(GRID - 1, cx + EXPLOSION_RADIUS); x++) {
+      if (Math.hypot(x - cx, z - cz) > EXPLOSION_RADIUS) continue;
+      const i = idxOf(x, z);
+      if (cells[i] !== 0) {
+        destroyed++;
+        if (ages[i] >= TOWER_LIFESPAN - 6 && i !== source && cooldowns[i] === 0) queue.push([x, z]);
+      }
+      cells[i] = 0; ages[i] = 0; warnings[i] = 0;
+      history[i] = Math.max(history[i], 0.45);
+      cooldowns[i] = EXPLOSION_COOLDOWN;
+    }
+  const glider = [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]];
+  for (let s = 0; s < MAX_DEBRIS_SEEDS; s++) {
+    const angle = Math.random() * Math.PI * 2;
+    const dist = (EXPLOSION_RADIUS + 1) + Math.random() * (EXPLOSION_RADIUS * 1.5);
+    const px = cx + Math.round(Math.cos(angle) * dist);
+    const pz = cz + Math.round(Math.sin(angle) * dist);
+    const kind = s % 3;
+    let offsets = [[0, 0]];
+    if (kind === 0) offsets = glider;
+    else if (kind === 1) offsets = [[0, 0], [1, 0], [0, 1], [1, 1]];
+    for (const [ox, oz] of offsets) {
+      const x = px + ox, z = pz + oz;
+      if (x < 0 || x >= GRID || z < 0 || z >= GRID) continue;
+      const i = idxOf(x, z);
+      cells[i] = Math.random() < 0.7 ? species : 1 + Math.floor(Math.random() * 3);
+      ages[i] = 1;
+      cooldowns[i] = EXPLOSION_COOLDOWN;
+    }
+  }
+  const w = cellWorld(cx, cz);
+  blasts.push({ x: cx, z: cz, ttl: 0.65 });
+  spawnBlastRing(w.x, w.z);
+  spawnParticles(w.x, 3, w.z, new THREE.Color(1.0, 0.55, 0.15), 26, 7, 0.8);
+  explosionsTotal++;
+  lastExplosion = `(${cx},${cz}) cleared ${destroyed}`;
+  snapshots = []; tracks = new Map();
+  AudioSys.pop(true);
+  const now = performance.now();
+  if (now - lastToastAt > 2200) { lastToastAt = now; toast(`💥 Explosion ${lastExplosion} at generation ${generations}`, 2600); }
 }
 
 /* ─────────────────────────── VISUALS ────────────────────────── */
@@ -246,8 +378,10 @@ function updateVisuals(dt) {
     _s.set(1, h, 1);
     _m.compose(_p, _q, _s);
     pillarsMesh.setMatrixAt(i, _m);
-    if (living > 0) _c.copy(PALETTE[living - 1]).lerp(ORANGE, ageFactor * 0.55);
-    else _c.copy(GHOST_A).lerp(GHOST_B, mem);
+    if (living > 0) {
+      _c.copy(PALETTE[living - 1]).lerp(ORANGE, ageFactor * 0.55);
+      if (ages[i] >= TOWER_LIFESPAN - 8) _c.lerp(REDHOT, 0.65 + 0.35 * Math.sin(generations * 2.0));
+    } else _c.copy(GHOST_A).lerp(GHOST_B, mem);
     pillarsMesh.setColorAt(i, _c);
   }
   pillarsMesh.instanceMatrix.needsUpdate = true;
@@ -256,42 +390,32 @@ function updateVisuals(dt) {
 
 /* ─────────────────────────── FLIGHT & PAINTING ──────────────── */
 const keys = new Set();
-function setMouseCapture(on) {
-  mouseCaptured = on;
-  if (on) canvas.requestPointerLock?.();
-  else if (document.pointerLockElement) document.exitPointerLock();
-}
-document.addEventListener('pointerlockchange', () => {
-  mouseCaptured = document.pointerLockElement === canvas;
-});
-document.addEventListener('mousemove', e => {
-  if (!mouseCaptured || overview || !started) return;
-  yaw -= e.movementX * 0.0025;
-  pitch = THREE.MathUtils.clamp(pitch - e.movementY * 0.0025, -1.54, 1.54);
-});
-canvas.addEventListener('contextmenu', e => e.preventDefault());
-let painting = false, paintAlive = true;
-canvas.addEventListener('mousedown', e => {
-  AudioSys.init();
-  if (!started) return;
-  if (!mouseCaptured && !overview) {
-    // unlocked: paint / erase
-    painting = true; paintAlive = e.button === 0;
-    paintAtCursor(e.clientX, e.clientY, paintAlive);
-  } else if (!mouseCaptured && overview) {
-    painting = true; paintAlive = e.button === 0;
-    paintAtCursor(e.clientX, e.clientY, paintAlive);
-  } else if (mouseCaptured) {
-    // captured: click re-locks handled by browser; nothing
+function updateFlight(dt) {
+  const look = 1.65;
+  if (keys.has('arrowleft')) yaw += look * dt;
+  if (keys.has('arrowright')) yaw -= look * dt;
+  if (keys.has('arrowup')) pitch -= look * dt;
+  if (keys.has('arrowdown')) pitch += look * dt;
+  pitch = THREE.MathUtils.clamp(pitch, -1.48, 1.48);
+  camera.rotation.set(pitch, yaw, 0);
+  const move = new THREE.Vector3();
+  const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+  const right = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+  if (keys.has('w')) move.add(fwd);
+  if (keys.has('s')) move.sub(fwd);
+  if (keys.has('d')) move.add(right);
+  if (keys.has('a')) move.sub(right);
+  if (keys.has(' ')) move.y += 1;
+  if (keys.has('control')) move.y -= 1;
+  if (move.lengthSq() > 0) {
+    const sp = keys.has('shift') ? 42 : 15;
+    camera.position.addScaledVector(move.normalize(), sp * dt);
+    camera.position.y = Math.max(0.8, camera.position.y);
   }
-});
-window.addEventListener('mouseup', () => painting = false);
-window.addEventListener('mousemove', e => {
-  if (painting && !mouseCaptured) paintAtCursor(e.clientX, e.clientY, paintAlive);
-});
+}
 const raycaster = new THREE.Raycaster();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
-function paintAtCursor(clientX, clientY, alive) {
+function paintAt(clientX, clientY, alive) {
   const ndc = new THREE.Vector2((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
   const hit = new THREE.Vector3();
@@ -304,55 +428,39 @@ function paintAtCursor(clientX, clientY, alive) {
   ages[i] = alive ? 1 : 0;
   refreshPopulation();
 }
-function updateFlight(dt) {
-  if (overview || !mouseCaptured || !started) return;
-  const move = new THREE.Vector3();
-  const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
-  const right = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
-  if (keys.has('w')) move.add(fwd);
-  if (keys.has('s')) move.sub(fwd);
-  if (keys.has('d')) move.add(right);
-  if (keys.has('a')) move.sub(right);
-  if (keys.has(' ')) move.y += 1;
-  if (keys.has('control')) move.y -= 1;
-  if (move.lengthSq() > 0) {
-    const sp = keys.has('shift') ? 55 : 19;
-    camera.position.addScaledVector(move.normalize(), sp * dt);
-    camera.position.y = Math.max(0.8, camera.position.y);
-  }
-  camera.rotation.set(pitch, yaw, 0);
-}
+canvas.addEventListener('contextmenu', e => e.preventDefault());
+canvas.addEventListener('mousedown', e => {
+  AudioSys.init();
+  if (!started) return;
+  paintAt(e.clientX, e.clientY, e.button === 0);
+});
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
-  if (k === 'tab') { e.preventDefault(); if (started && !overview) setMouseCapture(!mouseCaptured); return; }
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
   keys.add(k);
   if (!started) return;
-  if (k === 'p') running = !running;
+  if (k === 'escape' || k === 'p') running = !running;
   else if (k === 'n') { if (!running) stepSimulation(); }
   else if (k === 'r') seedWorld();
-  else if (k === 'c') { cells.fill(0); ages.fill(0); history.fill(0); generations = 0; population = 0; hashHistory = []; }
+  else if (k === 'c') {
+    cells.fill(0); ages.fill(0); history.fill(0); generations = 0; population = 0;
+    snapshots = []; tracks = new Map(); queue = []; cooldowns.fill(0);
+  }
   else if (k === 'm') memoryEnabled = !memoryEnabled;
-  else if (k === 'x') { explosionsEnabled = !explosionsEnabled; toast(explosionsEnabled ? '💥 Explosions <b>ON</b>' : '💥 Explosions <b>OFF</b>', 1800); }
   else if (k === 'v') toggleOverview();
   else if (k === '[') generationInterval = Math.min(2.0, generationInterval * 1.25);
-  else if (k === ']') generationInterval = Math.max(0.035, generationInterval / 1.25);
+  else if (k === ']') generationInterval = Math.max(0.20, generationInterval / 1.25);
   else if (k === '-') heightScale = Math.max(0.2, heightScale - 0.2);
   else if (k === '=' || k === '+') heightScale = Math.min(4.0, heightScale + 0.2);
   else if (k === '1' || k === '2' || k === '3') brushSpecies = +k;
+  else if (k === 'f') paintAt(window.innerWidth / 2, window.innerHeight / 2, true);
+  else if (k === 'g') paintAt(window.innerWidth / 2, window.innerHeight / 2, false);
 });
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 function toggleOverview() {
   overview = !overview;
-  if (overview) {
-    camera.position.set(0, 105, 68);
-    yaw = 0; pitch = -0.95;
-    setMouseCapture(false);
-  } else {
-    camera.position.set(0, 16, 40);
-    yaw = 0; pitch = -0.30;
-    setMouseCapture(true);
-  }
+  if (overview) { camera.position.set(0, 85, 60); yaw = 0; pitch = -0.95; }
+  else { camera.position.set(0, 16, 32); yaw = 0; pitch = -0.30; }
   camera.rotation.set(pitch, yaw, 0);
 }
 
@@ -363,16 +471,10 @@ function toast(html, dur = 3000) {
   $('toasts').appendChild(t);
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 450); }, dur);
 }
-let warnTimer = null;
-function showWarn() {
-  $('warn-banner').classList.remove('hidden');
-  clearTimeout(warnTimer);
-  warnTimer = setTimeout(() => $('warn-banner').classList.add('hidden'), 2600);
-}
 function updateHUD() {
   const mode = overview ? 'OVERVIEW' : 'FLIGHT';
   $('stats').textContent =
-    `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}     Explosions ${explosions}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}   |   Explosions ${explosionsEnabled ? 'ON' : 'OFF'}`;
+    `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}\nExplosions ${explosionsTotal}  |  Last ${lastExplosion}`;
 }
 $('sound-btn').addEventListener('click', () => {
   AudioSys.init();
@@ -384,8 +486,7 @@ $('play-btn').addEventListener('click', () => {
   started = true;
   $('start-screen').classList.add('hidden');
   $('hud').classList.remove('hidden');
-  setMouseCapture(true);
-  toast('🧬 Welcome to the Living Terrain. <b>Tab</b> unlocks mouse to paint life.', 4500);
+  toast('🧬 Welcome to the Living Terrain. Towers pulse red-hot before they blow.', 4500);
 });
 
 /* ─────────────────────────── MAIN LOOP ──────────────────────── */
@@ -402,17 +503,7 @@ function loop() {
   requestAnimationFrame(loop);
   const nowMs = performance.now();
   const dt = Math.min(0.05, (nowMs - lastT) / 1000); lastT = nowMs;
-  if (running && started) {
-    accumulated += dt;
-    let steps = 0;
-    while (accumulated >= generationInterval && steps < 4) {
-      stepSimulation();
-      accumulated -= generationInterval;
-      steps++;
-    }
-    if (steps === 4) accumulated = 0;
-  } else if (running && !started) {
-    // attract: evolve behind start screen
+  if (running) {
     accumulated += dt;
     let steps = 0;
     while (accumulated >= generationInterval && steps < 4) {
@@ -422,9 +513,18 @@ function loop() {
     }
     if (steps === 4) accumulated = 0;
   }
-  updateVisuals(dt);
-  updateFlight(dt);
+  visualElapsed += dt;
+  if (visualElapsed >= VISUAL_INTERVAL) {
+    updateVisuals(Math.min(0.1, visualElapsed));
+    visualElapsed = 0;
+  }
+  if (started) updateFlight(dt);
   updateParticles(dt);
+  updateBlasts(dt);
+  for (let b = blasts.length - 1; b >= 0; b--) {
+    blasts[b].ttl -= dt;
+    if (blasts[b].ttl <= 0) blasts.splice(b, 1);
+  }
   hudTimer += dt; if (hudTimer > 0.12) { hudTimer = 0; if (started) updateHUD(); }
   renderer.render(scene, camera);
 }

@@ -2,7 +2,7 @@ extends Node3D
 ## EVOLUTION: Living Terrain — Conway B3/S23 on a 2D grid, rendered in 3D.
 ## No addons, external assets, or individual nodes per cell required.
 
-const GRID: int = 80
+const GRID: int = 48
 const TOTAL: int = GRID * GRID
 const SPACING: float = 1.15
 const MAX_AGE: int = 65
@@ -22,11 +22,28 @@ var generations: int = 0
 var population: int = 0
 var running: bool = true
 var memory_enabled: bool = true
-var generation_interval: float = 0.22
+var generation_interval: float = 0.35
 var height_scale: float = 1.0
 var accumulated: float = 0.0
 var overview: bool = false
-var mouse_captured: bool = true
+var visual_elapsed: float = 0.0
+const VISUAL_INTERVAL: float = 1.0 / 20.0
+# Cellular Instability: thresholds are measured in simulation generations.
+const TOWER_LIFESPAN: int = 40
+const OSCILLATOR_CYCLES: int = 12
+const EXPLOSION_RADIUS: int = 4
+const MAX_EXPLOSIONS_PER_GENERATION: int = 3
+const EXPLOSION_COOLDOWN: int = 12
+const OSCILLATOR_MAX_CELLS: int = 64
+const MAX_DEBRIS_SEEDS: int = 12
+var explosion_cooldowns: PackedInt32Array = PackedInt32Array()
+var warning_timers: PackedInt32Array = PackedInt32Array()
+var pattern_snapshots: Array[PackedByteArray] = []
+var oscillator_tracks: Dictionary = {}
+var explosion_queue: Array[Vector2i] = []
+var blasts: Array[Dictionary] = []
+var explosions_total: int = 0
+var last_explosion: String = "NONE"
 var brush_species: int = 1
 
 var mesh_instance: MultiMeshInstance3D
@@ -44,16 +61,19 @@ func _ready() -> void:
 	ages.resize(TOTAL)
 	history.resize(TOTAL)
 	heights.resize(TOTAL)
+	explosion_cooldowns.resize(TOTAL)
+	warning_timers.resize(TOTAL)
 	build_world()
 	seed_world()
-	set_mouse_capture(true)
+	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func build_world() -> void:
 	var box: BoxMesh = BoxMesh.new()
 	box.size = Vector3(0.91, 1.0, 0.91)
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
-	mat.metallic = 0.18
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.metallic = 0.0
 	mat.roughness = 0.26
 	box.material = mat
 	multimesh = MultiMesh.new()
@@ -110,15 +130,9 @@ func build_world() -> void:
 	hint.position = Vector2(20.0, 125.0)
 	hint.add_theme_font_size_override("font_size", 14)
 	hint.add_theme_color_override("font_color", Color(0.77, 0.83, 0.96))
-	hint.text = "WASD fly  |  Mouse look  |  Space/Ctrl rise/fall  |  Shift boost\nTab mouse unlock  |  V overview  |  P pause  |  N step  |  R randomize  |  C clear\n[ / ] speed  |  - / = height  |  M terrain memory  |  1/2/3 species  |  X explosions\nUnlock mouse with Tab to LEFT-CLICK paint / RIGHT-CLICK erase on the ground"
-	warn_label = Label.new()
-	warn_label.position = Vector2(20.0, 60.0)
-	warn_label.add_theme_font_size_override("font_size", 17)
-	warn_label.add_theme_color_override("font_color", Color(1.0, 0.55, 0.6))
-	warn_label.text = "⚠️ STAGNATION DETECTED — OLD PILLARS EXPLODING!"
-	warn_label.visible = false
-	canvas.add_child(warn_label)
+	hint.text = "WASD fly  |  Arrow keys look  |  Space/Ctrl rise/fall  |  Shift boost\nV overview  |  P pause  |  N step  |  R randomize  |  C clear  |  Esc quit\n[ / ] speed  |  - / = height  |  M memory  |  1/2/3 species\nF place cell / G erase cell at screen centre (aim at ground)"
 	canvas.add_child(hint)
+	hint.text += "\nInstability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON"
 
 func index_of(x: int, z: int) -> int:
 	return z * GRID + x
@@ -129,6 +143,14 @@ func seed_world() -> void:
 		ages[i] = 0
 		history[i] = 0.0
 		heights[i] = 0.0
+		explosion_cooldowns[i] = 0
+		warning_timers[i] = 0
+	pattern_snapshots.clear()
+	oscillator_tracks.clear()
+	explosion_queue.clear()
+	blasts.clear()
+	explosions_total = 0
+	last_explosion = "NONE"
 	for k in range(17):
 		var cx: int = rng.randi_range(6, GRID - 7)
 		var cz: int = rng.randi_range(6, GRID - 7)
@@ -139,8 +161,6 @@ func seed_world() -> void:
 				if Vector2(x - cx, z - cz).length() < float(radius) and rng.randf() < 0.37:
 					cells[index_of(x, z)] = species
 	generations = 0
-	explosions = 0
-	hash_history.clear()
 	refresh_population()
 
 func refresh_population() -> void:
@@ -189,7 +209,227 @@ func step_simulation() -> void:
 			ages[i] = 0
 			history[i] = maxf(0.0, history[i] - 0.012)
 	generations += 1
+	update_instability()
 	refresh_population()
+
+# Detect short-period oscillators as stationary, bounded connected structures.
+# The signature includes the absolute footprint, so moving gliders are not
+# mistaken for oscillators. Period-one still lifes are handled by tower aging.
+func update_instability() -> void:
+	for i in range(TOTAL):
+		if explosion_cooldowns[i] > 0:
+			explosion_cooldowns[i] -= 1
+		if cells[i] != 0 and ages[i] >= TOWER_LIFESPAN and explosion_cooldowns[i] == 0:
+			explosion_queue.append(Vector2i(i % GRID, i / GRID))
+			# Prevent the same cell being queued repeatedly while waiting.
+			explosion_cooldowns[i] = EXPLOSION_COOLDOWN
+		if cells[i] != 0 and ages[i] >= TOWER_LIFESPAN - 8:
+			warning_timers[i] = 8
+		elif warning_timers[i] > 0:
+			warning_timers[i] -= 1
+
+	# Store exact previous board states. Only periods 2..6 qualify.
+	var board: PackedByteArray = cells.duplicate()
+	pattern_snapshots.append(board)
+	if pattern_snapshots.size() > 7:
+		pattern_snapshots.pop_front()
+	if pattern_snapshots.size() >= 3:
+		find_oscillators()
+
+	# Limit detonation work per generation; chained blasts are queued.
+	var processed: int = 0
+	while not explosion_queue.is_empty() and processed < MAX_EXPLOSIONS_PER_GENERATION:
+		var center: Vector2i = explosion_queue.pop_front()
+		if center.x < 0 or center.x >= GRID or center.y < 0 or center.y >= GRID:
+			continue
+		detonate(center)
+		processed += 1
+
+func find_oscillators() -> void:
+	var seen: PackedByteArray = PackedByteArray()
+	seen.resize(TOTAL)
+	var updated: Dictionary = {}
+	for start in range(TOTAL):
+		if cells[start] == 0 or seen[start] != 0:
+			continue
+		var component: Array[int] = []
+		var frontier: Array[int] = [start]
+		seen[start] = 1
+		var head: int = 0
+		while head < frontier.size():
+			var idx: int = frontier[head]
+			head += 1
+			component.append(idx)
+			var x: int = idx % GRID
+			var z: int = idx / GRID
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if dx == 0 and dz == 0:
+						continue
+					var nx: int = x + dx
+					var nz: int = z + dz
+					if nx < 0 or nx >= GRID or nz < 0 or nz >= GRID:
+						continue
+					var ni: int = index_of(nx, nz)
+					if cells[ni] != 0 and seen[ni] == 0:
+						seen[ni] = 1
+						frontier.append(ni)
+		if component.size() < 2 or component.size() > OSCILLATOR_MAX_CELLS:
+			continue
+		var min_x: int = GRID
+		var min_z: int = GRID
+		var max_x: int = 0
+		var max_z: int = 0
+		for idx in component:
+			min_x = mini(min_x, idx % GRID)
+			max_x = maxi(max_x, idx % GRID)
+			min_z = mini(min_z, idx / GRID)
+			max_z = maxi(max_z, idx / GRID)
+		# A one-cell margin accounts for a blinker changing orientation.
+		min_x = maxi(0, min_x - 1)
+		min_z = maxi(0, min_z - 1)
+		max_x = mini(GRID - 1, max_x + 1)
+		max_z = mini(GRID - 1, max_z + 1)
+		var key: String = "%d:%d" % [(min_x + max_x) / 2, (min_z + max_z) / 2]
+		var period: int = 0
+		for lag in range(2, mini(6, pattern_snapshots.size() - 1) + 1):
+			var previous: PackedByteArray = pattern_snapshots[pattern_snapshots.size() - 1 - lag]
+			var identical: bool = true
+			for z in range(min_z, max_z + 1):
+				for x in range(min_x, max_x + 1):
+					var i: int = index_of(x, z)
+					if (previous[i] != 0) != (cells[i] != 0):
+						identical = false
+						break
+				if not identical:
+					break
+			if identical:
+				# Reject period-one still lifes, even though they also match lag 2.
+				var prior: PackedByteArray = pattern_snapshots[pattern_snapshots.size() - 2]
+				var changed: bool = false
+				for idx in component:
+					if (prior[idx] != 0) != (cells[idx] != 0):
+						changed = true
+						break
+				if changed:
+					period = lag
+					break
+		if period == 0:
+			continue
+		var track: Dictionary = oscillator_tracks.get(key, {"ticks": 0, "period": period})
+		if int(track["period"]) != period:
+			track = {"ticks": 0, "period": period}
+		track["ticks"] = int(track["ticks"]) + 1
+		updated[key] = track
+		if int(track["ticks"]) >= OSCILLATOR_CYCLES * period:
+			var cx: int = (min_x + max_x) / 2
+			var cz: int = (min_z + max_z) / 2
+			var center_idx: int = index_of(cx, cz)
+			if explosion_cooldowns[center_idx] == 0:
+				explosion_queue.append(Vector2i(cx, cz))
+				explosion_cooldowns[center_idx] = EXPLOSION_COOLDOWN
+			updated.erase(key)
+	oscillator_tracks = updated
+
+func detonate(center: Vector2i) -> void:
+	var source: int = index_of(center.x, center.y)
+	var species: int = int(cells[source])
+	if species == 0:
+		species = rng.randi_range(1, 3)
+	var destroyed: int = 0
+	for z in range(maxi(0, center.y - EXPLOSION_RADIUS), mini(GRID, center.y + EXPLOSION_RADIUS + 1)):
+		for x in range(maxi(0, center.x - EXPLOSION_RADIUS), mini(GRID, center.x + EXPLOSION_RADIUS + 1)):
+			var dist: float = Vector2(x - center.x, z - center.y).length()
+			if dist > float(EXPLOSION_RADIUS):
+				continue
+			var i: int = index_of(x, z)
+			if cells[i] != 0:
+				destroyed += 1
+				# Chain reactions: near-expired towers may detonate next generation.
+				if ages[i] >= TOWER_LIFESPAN - 6 and i != source and explosion_cooldowns[i] == 0:
+					explosion_queue.append(Vector2i(x, z))
+			cells[i] = 0
+			ages[i] = 0
+			warning_timers[i] = 0
+			history[i] = maxf(history[i], 0.45)
+			explosion_cooldowns[i] = EXPLOSION_COOLDOWN
+	# Scatter viable fragments outside the cleared crater.
+	# Small clusters and gliders seed new activity rather than dying instantly.
+	var glider: Array[Vector2i] = [Vector2i(1, 0), Vector2i(2, 1), Vector2i(0, 2), Vector2i(1, 2), Vector2i(2, 2)]
+	for seed in range(MAX_DEBRIS_SEEDS):
+		var angle: float = rng.randf_range(0.0, TAU)
+		var distance: float = rng.randf_range(float(EXPLOSION_RADIUS) + 1.0, float(EXPLOSION_RADIUS) * 2.5)
+		var px: int = center.x + roundi(cos(angle) * distance)
+		var pz: int = center.y + roundi(sin(angle) * distance)
+		var kind: int = seed % 3
+		var offsets: Array[Vector2i] = [Vector2i.ZERO]
+		if kind == 0:
+			offsets = glider
+		elif kind == 1:
+			offsets = [Vector2i.ZERO, Vector2i(1, 0), Vector2i(0, 1), Vector2i(1, 1)]
+		for offset in offsets:
+			var x: int = px + offset.x
+			var z: int = pz + offset.y
+			if x < 0 or x >= GRID or z < 0 or z >= GRID:
+				continue
+			var i: int = index_of(x, z)
+			cells[i] = species if rng.randf() < 0.7 else rng.randi_range(1, 3)
+			ages[i] = 1
+			explosion_cooldowns[i] = EXPLOSION_COOLDOWN
+	var blast_pos := Vector3((float(center.x) - float(GRID - 1) * 0.5) * SPACING, 3.0, (float(center.y) - float(GRID - 1) * 0.5) * SPACING)
+	var blast_node := _make_blast_node(blast_pos)
+	blasts.append({"x": center.x, "z": center.y, "ttl": 0.65, "node": blast_node})
+	_spawn_burst(blast_pos, Color(1.0, 0.55, 0.15), 26)
+	explosions_total += 1
+	last_explosion = "(%d,%d) cleared %d" % [center.x, center.y, destroyed]
+	pattern_snapshots.clear()
+	oscillator_tracks.clear()
+	print("EVOLUTION: explosion ", last_explosion, " at generation ", generations)
+
+func _make_blast_node(pos: Vector3) -> MeshInstance3D:
+	var sphere := SphereMesh.new()
+	sphere.radius = 1.0
+	sphere.height = 2.0
+	sphere.radial_segments = 24
+	sphere.rings = 12
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1.0, 0.55, 0.15, 0.55)
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	sphere.material = mat
+	var node := MeshInstance3D.new()
+	node.mesh = sphere
+	node.position = pos
+	node.scale = Vector3.ONE
+	add_child(node)
+	return node
+
+func _spawn_burst(pos: Vector3, color: Color, amount: int) -> void:
+	var p := CPUParticles3D.new()
+	p.amount = amount
+	p.one_shot = true
+	p.explosiveness = 0.9
+	p.lifetime = 0.8
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.8
+	p.direction = Vector3(0, 1, 0)
+	p.spread = 180.0
+	p.initial_velocity_min = 3.0
+	p.initial_velocity_max = 8.0
+	p.gravity = Vector3(0, -4, 0)
+	p.color = color
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.12
+	mesh.height = 0.24
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mesh.material = mat
+	p.mesh = mesh
+	p.position = pos
+	add_child(p)
+	p.emitting = true
+	get_tree().create_timer(1.2).timeout.connect(func() -> void: if is_instance_valid(p): p.queue_free())
 
 func _process(delta: float) -> void:
 	if running:
@@ -201,10 +441,18 @@ func _process(delta: float) -> void:
 			steps += 1
 		if steps == 4:
 			accumulated = 0.0
-	update_visuals(delta)
+	visual_elapsed += delta
+	if visual_elapsed >= VISUAL_INTERVAL:
+		update_visuals(minf(0.1, visual_elapsed))
+		visual_elapsed = 0.0
 	update_flight(delta)
+	for b in range(blasts.size() - 1, -1, -1):
+		blasts[b]["ttl"] = float(blasts[b]["ttl"]) - delta
+		if float(blasts[b]["ttl"]) <= 0.0:
+			blasts.remove_at(b)
 	var mode: String = "OVERVIEW" if overview else "FLIGHT"
 	hud.text = "EVOLUTION  /  LIVING TERRAIN\nGeneration %d     Alive %d     %s\n%s   |   %.1f gen/sec   |   Height %.1fx   |   Memory %s   |   Brush %d" % [generations, population, mode, "RUNNING" if running else "PAUSED", 1.0 / generation_interval, height_scale, "ON" if memory_enabled else "OFF", brush_species]
+	hud.text += "\nExplosions %d  |  Last %s" % [explosions_total, last_explosion]
 
 func update_visuals(delta: float) -> void:
 	for z in range(GRID):
@@ -221,13 +469,23 @@ func update_visuals(delta: float) -> void:
 			var tint: Color
 			if living > 0:
 				tint = PALETTE[living - 1].lerp(Color(1.0, 0.52, 0.26), age_factor * 0.55)
+				if ages[i] >= TOWER_LIFESPAN - 8:
+					tint = tint.lerp(Color(1.0, 0.16, 0.04), 0.65 + 0.35 * sin(float(generations) * 2.0))
 			else:
 				tint = Color(0.06, 0.14, 0.26).lerp(Color(0.19, 0.26, 0.42), terrain_memory)
 			multimesh.set_instance_color(i, tint)
 
 func update_flight(delta: float) -> void:
-	if overview or not mouse_captured:
-		return
+	var look_speed: float = 1.65
+	if Input.is_key_pressed(KEY_LEFT):
+		camera.rotation.y += look_speed * delta
+	if Input.is_key_pressed(KEY_RIGHT):
+		camera.rotation.y -= look_speed * delta
+	if Input.is_key_pressed(KEY_UP):
+		camera.rotation.x -= look_speed * delta
+	if Input.is_key_pressed(KEY_DOWN):
+		camera.rotation.x += look_speed * delta
+	camera.rotation.x = clampf(camera.rotation.x, -1.48, 1.48)
 	var move: Vector3 = Vector3.ZERO
 	if Input.is_key_pressed(KEY_W): move -= camera.global_basis.z
 	if Input.is_key_pressed(KEY_S): move += camera.global_basis.z
@@ -236,25 +494,19 @@ func update_flight(delta: float) -> void:
 	if Input.is_key_pressed(KEY_SPACE): move += Vector3.UP
 	if Input.is_key_pressed(KEY_CTRL): move += Vector3.DOWN
 	if move.length_squared() > 0.0:
-		var speed: float = 55.0 if Input.is_key_pressed(KEY_SHIFT) else 19.0
+		var speed: float = 42.0 if Input.is_key_pressed(KEY_SHIFT) else 15.0
 		camera.global_position += move.normalized() * speed * delta
 		camera.position.y = maxf(0.8, camera.position.y)
 
-func set_mouse_capture(enabled: bool) -> void:
-	mouse_captured = enabled
-	Input.mouse_mode = Input.MOUSE_MODE_CAPTURED if enabled else Input.MOUSE_MODE_VISIBLE
+func _notification(what: int) -> void:
+	if what == NOTIFICATION_WM_CLOSE_REQUEST:
+		get_tree().quit()
 
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseMotion and mouse_captured and not overview:
-		camera.rotation.y -= event.relative.x * 0.0025
-		camera.rotation.x = clampf(camera.rotation.x - event.relative.y * 0.0025, -1.54, 1.54)
-	if event is InputEventMouseButton and event.pressed and not mouse_captured:
-		if event.button_index == MOUSE_BUTTON_LEFT or event.button_index == MOUSE_BUTTON_RIGHT:
-			paint_at_cursor(event.position, event.button_index == MOUSE_BUTTON_LEFT)
 	if event is InputEventKey and event.pressed and not event.echo:
 		match event.keycode:
-			KEY_TAB:
-				set_mouse_capture(not mouse_captured)
+			KEY_ESCAPE, KEY_F10:
+				get_tree().quit()
 			KEY_P:
 				running = not running
 			KEY_N:
@@ -268,30 +520,33 @@ func _unhandled_input(event: InputEvent) -> void:
 					history[i] = 0.0
 				generations = 0
 				population = 0
+				pattern_snapshots.clear()
+				oscillator_tracks.clear()
+				explosion_queue.clear()
+				for i in range(TOTAL):
+					explosion_cooldowns[i] = 0
 			KEY_M:
 				memory_enabled = not memory_enabled
-			KEY_X:
-				explosions_enabled = not explosions_enabled
 			KEY_V:
 				overview = not overview
 				if overview:
-					camera.position = Vector3(0.0, 105.0, 68.0)
+					camera.position = Vector3(0.0, 85.0, 60.0)
 					camera.rotation = Vector3(-0.95, 0.0, 0.0)
-					set_mouse_capture(false)
 				else:
-					camera.position = Vector3(0.0, 16.0, 40.0)
+					camera.position = Vector3(0.0, 16.0, 32.0)
 					camera.rotation = Vector3(-0.30, 0.0, 0.0)
-					set_mouse_capture(true)
 			KEY_BRACKETLEFT:
 				generation_interval = minf(2.0, generation_interval * 1.25)
 			KEY_BRACKETRIGHT:
-				generation_interval = maxf(0.035, generation_interval / 1.25)
+				generation_interval = maxf(0.20, generation_interval / 1.25)
 			KEY_MINUS:
 				height_scale = maxf(0.2, height_scale - 0.2)
 			KEY_EQUAL:
 				height_scale = minf(4.0, height_scale + 0.2)
 			KEY_1, KEY_2, KEY_3:
 				brush_species = event.keycode - KEY_1 + 1
+			KEY_F, KEY_G:
+				paint_at_cursor(get_viewport().get_visible_rect().size * 0.5, event.keycode == KEY_F)
 
 func paint_at_cursor(screen_pos: Vector2, alive: bool) -> void:
 	var ray_origin: Vector3 = camera.project_ray_origin(screen_pos)

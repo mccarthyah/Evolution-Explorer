@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
 <title>EVOLUTION — Living Terrain</title>
-<meta name="description" content="Fly through pillars grown by Conway's Game of Life. Height = age + terrain memory. Old pillars explode.">
+<meta name="description" content="Fly through pillars grown by Conway's Game of Life. Towers explode at age 40. Oscillators detonate after 12 cycles.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>">
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
@@ -21,13 +21,14 @@
     <div class="logo">🧬</div>
     <h1>EVOLUTION<br><span>LIVING TERRAIN</span></h1>
     <p class="tagline">Fly through pillars <b>grown by the Game of Life</b>.<br>
-    Height = how long cells have lived + terrain memory.<br>
-    Cells <b>explode at age 65</b> — and stagnant, repeating patterns detonate too.</p>
+    Towers <b>explode at age 40</b> (watch them pulse red-hot first).<br>
+    Oscillators detonate after <b>12 cycles</b> — blasts leave craters<br>
+    and scatter debris that seeds new life.</p>
     <div class="howto">
-      <div class="howto-row"><span>🖱️</span><p><b>Click</b> to capture mouse &amp; fly — <b>WASD</b> move, <b>Space/Ctrl</b> rise/fall, <b>Shift</b> boost</p></div>
-      <div class="howto-row"><span>🎨</span><p><b>Tab</b> unlocks mouse to <b>paint</b> (left) / <b>erase</b> (right) — species <b>1 / 2 / 3</b></p></div>
-      <div class="howto-row"><span>👁️</span><p><b>V</b> overview &nbsp;•&nbsp; <b>P</b> pause &nbsp;•&nbsp; <b>N</b> step &nbsp;•&nbsp; <b>R</b> random &nbsp;•&nbsp; <b>C</b> clear</p></div>
-      <div class="howto-row"><span>⚙️</span><p><b>[ / ]</b> speed &nbsp;•&nbsp; <b>- / =</b> height &nbsp;•&nbsp; <b>M</b> memory &nbsp;•&nbsp; <b>X</b> explosions</p></div>
+      <div class="howto-row"><span>🕹️</span><p><b>WASD</b> fly &nbsp;•&nbsp; <b>Arrow keys</b> look &nbsp;•&nbsp; <b>Space/Ctrl</b> rise/fall &nbsp;•&nbsp; <b>Shift</b> boost</p></div>
+      <div class="howto-row"><span>🎨</span><p><b>F</b> place cell / <b>G</b> erase at screen centre — species <b>1 / 2 / 3</b> (or click the ground)</p></div>
+      <div class="howto-row"><span>👁️</span><p><b>V</b> overview &nbsp;•&nbsp; <b>P</b> pause &nbsp;•&nbsp; <b>N</b> step &nbsp;•&nbsp; <b>R</b> random &nbsp;•&nbsp; <b>C</b> clear &nbsp;•&nbsp; <b>Esc</b> pause</p></div>
+      <div class="howto-row"><span>⚙️</span><p><b>[ / ]</b> speed &nbsp;•&nbsp; <b>- / =</b> height &nbsp;•&nbsp; <b>M</b> memory</p></div>
     </div>
     <button id="play-btn" class="play-btn">▶ &nbsp;START FLYING</button>
   </div>
@@ -36,11 +37,11 @@
 <!-- ══════════ HUD ══════════ -->
 <div id="hud" class="hidden">
   <div id="stats">EVOLUTION / LIVING TERRAIN</div>
-  <div id="warn-banner" class="hidden">⚠️ STAGNATION DETECTED — OLD PILLARS EXPLODING!</div>
-  <div id="hint">WASD fly | Mouse look | Space/Ctrl rise/fall | Shift boost<br>
-  Tab mouse unlock | V overview | P pause | N step | R randomize | C clear<br>
-  [ / ] speed | - / = height | M terrain memory | 1/2/3 species | X explosions<br>
-  Unlock mouse with Tab to LEFT-CLICK paint / RIGHT-CLICK erase on the ground</div>
+  <div id="hint">WASD fly | Arrow keys look | Space/Ctrl rise/fall | Shift boost
+V overview | P pause | N step | R randomize | C clear | Esc pause
+[ / ] speed | - / = height | M memory | 1/2/3 species
+F place cell / G erase cell at screen centre (aim at ground) — or click the ground
+Instability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON</div>
   <div id="toasts"></div>
   <button id="sound-btn" class="icon-btn" title="Sound on/off">🔊</button>
 </div>
