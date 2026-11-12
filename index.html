@@ -3,9 +3,9 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
-<title>Evolution Explorer — 3D Game of Life</title>
-<meta name="description" content="Conway's Game of Life in 3D. Seed life, evolve worlds, complete quests, and explore living universes.">
-<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🧬</text></svg>">
+<title>Evolution Explorer — Fly Through Living Pillars</title>
+<meta name="description" content="Fly through pillars grown by Conway's Game of Life. Height = age. Old pillars explode. Dodge, collect DNA, survive.">
+<link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🚀</text></svg>">
 <link rel="stylesheet" href="css/style.css">
 <script type="importmap">
 { "imports": { "three": "./lib/three.module.js" } }
@@ -18,161 +18,87 @@
 <!-- ══════════ START SCREEN ══════════ -->
 <div id="start-screen" class="overlay">
   <div class="start-card">
-    <div class="logo">🧬</div>
+    <div class="logo">🚀</div>
     <h1>EVOLUTION<br><span>EXPLORER</span></h1>
-    <p class="tagline">Conway's Game of Life… but in 3D.<br>Seed life. Grow worlds. Bend evolution.</p>
+    <p class="tagline">Fly through pillars <b>grown by the Game of Life</b>.<br>
+    Pillar height = how long its cells have lived.<br>
+    Old pillars <b>explode</b> — and so do stagnant, repeating patterns.</p>
 
-    <div class="start-worlds">
-      <p class="start-label">CHOOSE YOUR FIRST WORLD</p>
-      <div class="world-grid">
-        <button class="world-btn" data-world="soup"><span class="w-icon">🌊</span><span>Primordial Soup</span><small>Random chaos</small></button>
-        <button class="world-btn" data-world="glidergun"><span class="w-icon">🚀</span><span>Glider Gun</span><small>Endless ships</small></button>
-        <button class="world-btn" data-world="acorn"><span class="w-icon">🌰</span><span>Acorn</span><small>Slow explosion</small></button>
-        <button class="world-btn" data-world="pulsar"><span class="w-icon">💓</span><span>Pulsar</span><small>Breathing oscillator</small></button>
-        <button class="world-btn" data-world="helix"><span class="w-icon">🧬</span><span>DNA Helix</span><small>Twisted beauty</small></button>
-        <button class="world-btn" data-world="empty"><span class="w-icon">✨</span><span>Blank Slate</span><small>Paint your own</small></button>
+    <div class="howto">
+      <div class="howto-row"><span>🖱️</span><p><b>Move mouse</b> to steer your ship</p></div>
+      <div class="howto-row"><span>⌨️</span><p><b>WASD / arrows</b> steer &nbsp;•&nbsp; <b>Shift</b> boost</p></div>
+      <div class="howto-row"><span>📱</span><p><b>Drag</b> to steer on touch screens</p></div>
+      <div class="howto-row"><span>🧬</span><p>Collect <b>DNA orbs</b>, skim pillars for <b>near-miss</b> bonuses</p></div>
+      <div class="howto-row"><span>💥</span><p>Don't hit tall pillars — young = short = safe, old = tall = deadly</p></div>
+    </div>
+
+    <div class="rule-pick">
+      <p class="start-label">LIFE RULES</p>
+      <div class="rule-row">
+        <button class="rule-btn active" data-rule="classic">Conway B3/S23</button>
+        <button class="rule-btn" data-rule="highlife">HighLife B36/S23</button>
+        <button class="rule-btn" data-rule="daynight">Day &amp; Night B3678/S34678</button>
       </div>
     </div>
 
-    <button id="play-btn" class="play-btn">▶ &nbsp;START EXPLORING</button>
-    <div class="start-controls">
-      <span><b>Drag</b> paint &nbsp;•&nbsp; <b>Right-drag</b> orbit &nbsp;•&nbsp; <b>Scroll</b> zoom &nbsp;•&nbsp; <b>Space</b> pause</span>
-      <button id="help-btn-start" class="link-btn">How to play →</button>
+    <button id="play-btn" class="play-btn">▶ &nbsp;TAKE OFF</button>
+    <p class="best-line" id="best-line"></p>
+  </div>
+</div>
+
+<!-- ══════════ GAME OVER ══════════ -->
+<div id="gameover-screen" class="overlay hidden">
+  <div class="start-card">
+    <div class="logo">💥</div>
+    <h1>CRASHED!</h1>
+    <p class="tagline">Your ship met a pillar. The Life goes on without you…</p>
+    <div class="final-stats">
+      <div class="fstat"><label>SCORE</label><b id="final-score">0</b></div>
+      <div class="fstat"><label>DISTANCE</label><b id="final-dist">0m</b></div>
+      <div class="fstat"><label>DNA</label><b id="final-dna">0</b></div>
+      <div class="fstat"><label>BEST</label><b id="final-best">0</b></div>
     </div>
+    <button id="restart-btn" class="play-btn">↻ &nbsp;FLY AGAIN</button>
+    <button id="menu-btn" class="ghost-btn">Back to menu</button>
   </div>
 </div>
 
 <!-- ══════════ HUD ══════════ -->
 <div id="hud" class="hidden">
-  <!-- Top bar -->
   <header id="topbar">
-    <div class="brand"><span class="brand-icon">🧬</span><div><strong>EVOLUTION EXPLORER</strong><small id="rule-name">Rule: Stable 5766</small></div></div>
+    <div class="brand"><span class="brand-icon">🚀</span><div><strong>EVOLUTION EXPLORER</strong><small id="life-info">Life: Gen 0 · Pop 0</small></div></div>
     <div class="top-stats">
-      <div class="stat"><label>GEN</label><b id="stat-gen">0</b></div>
-      <div class="stat"><label>POPULATION</label><b id="stat-pop">0</b></div>
+      <div class="stat"><label>SCORE</label><b id="stat-score">0</b></div>
+      <div class="stat"><label>DISTANCE</label><b id="stat-dist">0m</b></div>
       <div class="stat dna"><label>🧬 DNA</label><b id="stat-dna">0</b></div>
-      <div class="stat level"><label>LEVEL</label><b id="stat-level">1</b><div class="xp-bar"><div id="xp-fill"></div></div></div>
+      <div class="stat"><label>SPEED</label><b id="stat-speed">0</b></div>
+      <div class="stat combo"><label>COMBO</label><b id="stat-combo">×1</b></div>
     </div>
     <div class="top-actions">
+      <button id="shield-ind" class="icon-btn hidden" title="Shield active">🛡️</button>
       <button id="sound-btn" class="icon-btn" title="Sound (M)">🔊</button>
-      <button id="help-btn" class="icon-btn" title="Help (H)">?</button>
-      <button id="menu-btn" class="icon-btn" title="Menu">☰</button>
+      <button id="pause-btn" class="icon-btn" title="Pause (P)">⏸</button>
     </div>
   </header>
 
-  <!-- Left panel: tools + patterns -->
-  <aside id="left-panel" class="panel">
-    <div class="panel-head">TOOLS <span class="kbd-hint">1–7</span></div>
-    <div class="tool-grid">
-      <button class="tool-btn active" data-tool="paint" title="Paint life (1)"><span>🖌️</span>Paint</button>
-      <button class="tool-btn" data-tool="erase" title="Erase (2)"><span>🧽</span>Erase</button>
-      <button class="tool-btn" data-tool="bomb" title="Bomb — destroy (3)"><span>💣</span>Bomb</button>
-      <button class="tool-btn" data-tool="rain" title="Life rain (4)"><span>🌧️</span>Rain</button>
-      <button class="tool-btn" data-tool="mutate" title="Mutation ray (5)"><span>⚡</span>Mutate</button>
-      <button class="tool-btn" data-tool="stamp" title="Stamp pattern (6)"><span>🔷</span>Stamp</button>
-      <button class="tool-btn" data-tool="orbit" title="Orbit camera (7)"><span>🎥</span>Orbit</button>
-    </div>
-    <div class="slider-row">
-      <label>Brush <b id="brush-val">2</b></label>
-      <input type="range" id="brush-size" min="1" max="6" value="2" step="1">
-    </div>
-    <div class="panel-head" style="margin-top:14px">PATTERNS <span class="kbd-hint">click then click world</span></div>
-    <div class="pattern-grid" id="pattern-grid"></div>
-    <div class="panel-head" style="margin-top:14px">QUESTS</div>
-    <div id="quest-list"></div>
-  </aside>
+  <div id="warn-banner" class="hidden">⚠️ STAGNATION DETECTED — PILLARS EXPLODING!</div>
 
-  <!-- Right panel: world + stats -->
-  <aside id="right-panel" class="panel">
-    <div class="panel-head">EVOLUTION RULES</div>
-    <div class="rule-grid" id="rule-grid">
-      <button class="rule-btn active" data-rule="stable">🟢 Stable<small>S 5,6 · B 6,7</small></button>
-      <button class="rule-btn" data-rule="explosive">🔥 Explosive<small>S 4,5 · B 5,6</small></button>
-      <button class="rule-btn" data-rule="maze">🌀 Maze<small>S 4,5,6 · B 5</small></button>
-      <button class="rule-btn" data-rule="chaos">🎲 Chaos<small>S 3,4,5 · B 4,5,6</small></button>
-    </div>
-    <button id="mutate-rule-btn" class="wide-btn">⚡ Mutate Rule (random)</button>
-
-    <div class="panel-head" style="margin-top:14px">WORLD</div>
-    <label class="check-row"><input type="checkbox" id="wrap-toggle" checked> <span>Wrap edges (torus)</span></label>
-    <label class="check-row"><input type="checkbox" id="trails-toggle" checked> <span>Birth glow &amp; particles</span></label>
-    <label class="check-row"><input type="checkbox" id="auto-orbit-toggle"> <span>Cinematic auto-orbit</span></label>
-    <div class="slider-row">
-      <label>Speed <b id="speed-val">6</b> gen/s</label>
-      <input type="range" id="speed-slider" min="1" max="30" value="6" step="1">
-    </div>
-    <div class="slider-row">
-      <label>Density <b id="density-val">18%</b></label>
-      <input type="range" id="density-slider" min="5" max="45" value="18" step="1">
-    </div>
-
-    <div class="panel-head" style="margin-top:14px">POPULATION</div>
-    <canvas id="pop-chart" width="260" height="70"></canvas>
-    <div class="mini-stats">
-      <span>Births <b id="stat-births">0</b></span>
-      <span>Deaths <b id="stat-deaths">0</b></span>
-      <span><b id="stat-fps">60</b> fps</span>
-    </div>
-  </aside>
-
-  <!-- Bottom bar -->
   <footer id="bottombar">
-    <div class="transport">
-      <button id="play-pause-btn" class="transport-btn primary" title="Play / Pause (Space)">⏸</button>
-      <button id="step-btn" class="transport-btn" title="Step one generation (.)">⏭</button>
-      <button id="clear-btn" class="transport-btn" title="Clear world (C)">🗑</button>
-      <button id="random-btn" class="transport-btn" title="Random soup (R)">🎲</button>
-      <button id="focus-btn" class="transport-btn" title="Focus population (F)">🎯</button>
-    </div>
-    <div class="bottom-hint" id="bottom-hint">🖌️ Paint life — drag on the world. Right-drag to orbit, scroll to zoom.</div>
-    <div class="bottom-right">
-      <button id="panels-btn" class="transport-btn" title="Toggle panels">◧ Panels</button>
-    </div>
+    <div class="bottom-hint" id="bottom-hint">🖱️ Move mouse to steer &nbsp;•&nbsp; <b>Shift</b> boost &nbsp;•&nbsp; <b>P</b> pause</div>
+    <button id="boost-btn" class="boost-btn">⚡ BOOST</button>
   </footer>
 
   <div id="toasts"></div>
-  <div id="brush-cursor"></div>
+  <div id="vignette"></div>
 </div>
 
-<!-- ══════════ HELP OVERLAY ══════════ -->
-<div id="help-overlay" class="overlay hidden">
-  <div class="help-card">
-    <button class="close-btn" id="help-close">✕</button>
-    <h2>🧬 How to Play</h2>
-    <p>Every living cube follows simple rules: it survives, is born, or dies based on how many neighbours it has. Paint a few cubes, press play, and watch a universe evolve.</p>
-    <div class="help-cols">
-      <div>
-        <h3>🖱️ Mouse</h3>
-        <ul>
-          <li><b>Left-drag on world</b> — use tool (paint / erase / bomb…)</li>
-          <li><b>Left-drag on space</b> — orbit camera</li>
-          <li><b>Right / middle-drag</b> — pan camera</li>
-          <li><b>Scroll</b> — zoom &nbsp;•&nbsp; <b>Shift+scroll</b> — brush size</li>
-          <li><b>Alt+drag</b> — always orbit</li>
-        </ul>
-        <h3>📱 Touch</h3>
-        <ul>
-          <li><b>1 finger</b> — paint / orbit &nbsp;•&nbsp; <b>2 fingers</b> — orbit + pinch zoom</li>
-        </ul>
-      </div>
-      <div>
-        <h3>⌨️ Keyboard</h3>
-        <ul>
-          <li><b>Space</b> play/pause &nbsp;•&nbsp; <b>.</b> step &nbsp;•&nbsp; <b>C</b> clear &nbsp;•&nbsp; <b>R</b> random</li>
-          <li><b>1–7</b> tools &nbsp;•&nbsp; <b>[ ]</b> brush size &nbsp;•&nbsp; <b>+ −</b> speed</li>
-          <li><b>WASD / arrows</b> pan &nbsp;•&nbsp; <b>Q / E</b> rotate &nbsp;•&nbsp; <b>F</b> focus</li>
-          <li><b>M</b> mute &nbsp;•&nbsp; <b>H</b> help &nbsp;•&nbsp; <b>Esc</b> close</li>
-        </ul>
-        <h3>🎯 Tips</h3>
-        <ul>
-          <li>Earn <b>🧬 DNA</b> from births &amp; quests to level up and unlock tools.</li>
-          <li>Try <b>Stamp → Glider Gun</b> for endless spaceships.</li>
-          <li>Switch <b>rules</b> to change how life behaves — each world feels different!</li>
-          <li>Use <b>🎯 Focus</b> to fly to where life is densest.</li>
-        </ul>
-      </div>
-    </div>
-    <button class="play-btn small" id="help-play">LET'S GO ▶</button>
+<!-- ══════════ PAUSE ══════════ -->
+<div id="pause-overlay" class="overlay hidden">
+  <div class="start-card small-card">
+    <h1>⏸ PAUSED</h1>
+    <p class="tagline">The pillars wait for no one… except now.</p>
+    <button id="resume-btn" class="play-btn">▶ &nbsp;RESUME</button>
+    <button id="quit-btn" class="ghost-btn">Quit to menu</button>
   </div>
 </div>
 

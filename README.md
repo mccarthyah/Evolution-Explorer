@@ -1,8 +1,8 @@
-# 🧬 Evolution Explorer
+# 🚀 Evolution Explorer
 
-**Conway's Game of Life… but in 3D.**
+**Fly through pillars grown by Conway's Game of Life.**
 
-Seed life, grow worlds, bend evolution. Paint living cubes into a 3D universe, watch them evolve under different physics rules, complete quests, earn DNA, and level up.
+Pillar height = how long its cells have lived. Old pillars **explode** — and so do stagnant, repeating patterns. Dodge, collect DNA, survive.
 
 ![Web](https://img.shields.io/badge/Web-Play%20now-22d3ee) ![Godot](https://img.shields.io/badge/Godot-4.x-478cbf) ![Three.js](https://img.shields.io/badge/Three.js-r160-e879f9)
 
@@ -18,7 +18,7 @@ python3 -m http.server 8000
 # open http://localhost:8000
 ```
 
-Or deploy to GitHub Pages: **Settings → Pages → Deploy from branch → `main` / `(root)`**. The game is a single static site (`index.html` + `css/` + `js/` + vendored `lib/three.module.js`) — no build step, works offline.
+Or deploy to GitHub Pages: **Settings → Pages → Deploy from branch → `main` / `(root)`**. Single static site, no build step, works offline.
 
 ### Godot version (native)
 
@@ -29,45 +29,38 @@ Or deploy to GitHub Pages: **Settings → Pages → Deploy from branch → `main
 
 ## 🎮 How to play
 
-Every living cube survives, is born, or dies based on how many neighbours it has. Paint a few cubes, press play, and watch a universe evolve.
+You fly forward forever through an endless field of pillars. The pillars are alive — a Game of Life simulation runs in every chunk ahead of you:
+
+- 🟦 **Young cells → short pillars** (safe to fly over)
+- 🟧 **Old cells → tall pillars** (deadly — they reach your altitude)
+- 💥 **Cells explode at age 24** — watch white-hot pillars burst
+- ⚠️ **Stagnant / repeating patterns explode too** — if a chunk's Life repeats a previous state (still life or oscillator), everything older than 4 generations blows up. Bonus points!
+- 🧬 **Collect DNA orbs** and **skim pillars for near-miss bonuses** to build your combo
+- 🛡️ **Shield orbs** (gold) save you from one crash
+- ⚡ **Speed rises every 400 m** — boost with Shift for double score (and double danger)
 
 | Action | Mouse | Touch | Keyboard |
 |---|---|---|---|
-| Use tool (paint / erase / bomb…) | **Left-drag on world** | 1 finger on world | `1–7` tools |
-| Orbit camera | Left-drag on space / **Right-drag** | 1 finger on space / 2 fingers | `Q` / `E` rotate |
-| Pan camera | **Middle-drag** | — | `WASD` / arrows |
-| Zoom | **Scroll** | Pinch | — |
-| Brush size | `Shift`+scroll | — | `[` `]` |
-| Play / pause | Bottom bar ⏸ | Bottom bar | `Space` |
-| Step 1 generation | ⏭ | ⏭ | `.` |
-| Clear / Random | 🗑 / 🎲 | 🗑 / 🎲 | `C` / `R` |
-| Focus population | 🎯 | 🎯 | `F` |
-| Sound / Help | 🔊 / `?` | 🔊 / `?` | `M` / `H` |
+| Steer ship | **Move mouse** | **Drag** | `WASD` / arrows |
+| Boost | — | ⚡ button | `Shift` (hold) |
+| Pause | ⏸ button | ⏸ button | `P` / `Esc` |
+| Sound | 🔊 button | 🔊 button | `M` |
+| Start / restart | Buttons | Buttons | `Enter` |
 
-**Tools:** 🖌️ Paint · 🧽 Erase · 💣 Bomb · 🌧️ Life Rain · ⚡ Mutation Ray · 🔷 Stamp · 🎥 Orbit
-
-**Patterns to stamp:** Glider, Spaceship, Pulsar, Acorn, R-pentomino, Glider Gun, Cube, DNA Helix.
-
-**Worlds to start with:** Primordial Soup, Glider Gun, Acorn, Pulsar, DNA Helix, Blank Slate.
-
-**Evolution rules** (each changes how life behaves):
-- 🟢 **Stable 5766** — S 5,6 · B 6,7 (forms stable structures)
-- 🔥 **Explosive 4555** — S 4,5 · B 5,6 (grows fast)
-- 🌀 **Maze 4565** — S 4,5,6 · B 5 (maze-like growth)
-- 🎲 **Chaos 345456** — S 3,4,5 · B 4,5,6 (chaotic)
-- ⚡ **Mutate Rule** — randomise the physics mid-game!
-
-**Progression:** Earn 🧬 DNA from births and quests (First Life, Population Boom, Survivor, Phoenix, Still Life…) to level up. Higher levels multiply your DNA gains.
+**Life rules** (choose on the start screen — each grows different pillar forests):
+- **Conway B3/S23** — the classic
+- **HighLife B36/S23** — denser, taller forests
+- **Day & Night B3678/S34678** — symmetric, explosive
 
 ---
 
 ## ✨ Features
 
-- **Real 3D Life** — 32×32×14 voxel universe (web) / 28×28×12 (Godot), 26-neighbour rules, toroidal wrap or solid walls
-- **Gorgeous rendering** — age-graded glowing cells (newborn cyan → ancient violet), birth-pop animation, particle bursts, orbiting coloured lights, starfield, ACES tone mapping
-- **Buttery controls** — damped orbit/pan/zoom camera, voxel-accurate painting, pinch zoom, full keyboard shortcuts, cinematic auto-orbit, focus-on-population
-- **Game feel** — synth sound effects + ambient pad (WebAudio), screen shake, toasts, live population chart, FPS counter
-- **Zero dependencies** — Three.js is vendored in `lib/`; no CDN, no build step
+- **Living obstacle course** — 5 Life chunks evolve ahead of you in real time; pillars grow, shrink, and explode as patterns live and die
+- **Age = height** — newborn cyan stubs → orange mid-life → magenta veterans → white-hot pillars about to burst
+- **Stagnation detection** — FNV hash history per chunk catches still lifes & oscillators and detonates them
+- **Game feel** — banking ship, chase camera with speed FOV, engine hum that rises with speed, explosion particles, near-miss whooshes, combo pitch-rising pickups
+- **Zero dependencies** — Three.js vendored in `lib/`; no CDN, no build step
 
 ## 📁 Project structure
 
@@ -75,7 +68,7 @@ Every living cube survives, is born, or dies based on how many neighbours it has
 Evolution-Explorer/
 ├── index.html            # Web game entry (GitHub Pages ready)
 ├── css/style.css         # UI styling
-├── js/main.js            # Web game: simulation, rendering, input, audio, quests
+├── js/main.js            # Web game: Life chunks, flight, collision, audio
 ├── lib/three.module.js   # Vendored Three.js r160 (offline-friendly)
 ├── project.godot         # Godot 4 project
 ├── icon.svg
@@ -85,10 +78,10 @@ Evolution-Explorer/
 
 ## 🔧 Tech notes
 
-- **Web:** vanilla JS + Three.js `InstancedMesh` (one draw call for all cells), custom spherical camera rig, raycast voxel picking against an invisible volume, WebAudio synth SFX.
-- **Godot:** GDScript + `MultiMeshInstance3D`, physics-ray picking, code-built UI (no fragile `.tscn` UI).
-- Simulation is brute-force neighbour counting over typed arrays — fast enough for ~14k cells at 30 gen/s.
+- **Web:** vanilla JS + Three.js `InstancedMesh` (one draw call for all pillars), chunked Life simulation with per-chunk hash history, mouse-follow flight controls, WebAudio synth SFX.
+- **Godot:** GDScript + `MultiMeshInstance3D`, code-built UI, same chunk/Life design.
+- Collision is analytic (pillar footprint vs. ship position/altitude) — no physics engine needed.
 
 ---
 
-*Built with 🧬 — go evolve something.*
+*Built with 🚀 — go fly through something alive.*

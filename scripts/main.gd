@@ -1,96 +1,94 @@
 extends Node3D
-## Evolution Explorer — Conway's Game of Life in 3D (Godot 4)
-## Seed life, grow worlds, bend evolution.
+## Evolution Explorer — Fly Through Living Pillars (Godot 4)
+## Pillars grown by Conway's Game of Life.
+## Height = how long cells have lived. Old pillars explode.
+## Stagnant / repeating patterns explode too.
 ##
 ## Controls:
-##   Left-drag on world  — paint / erase / bomb / stamp (selected tool)
-##   Left-drag on space  — orbit camera
-##   Right-drag          — pan camera
-##   Mouse wheel         — zoom (Shift+wheel = brush size)
-##   Space               — play / pause    . — step    C — clear    R — random
-##   1-5                 — tools           [ ] — brush size
-##   WASD / arrows       — pan             Q / E — rotate
+##   Mouse move        — steer ship
+##   WASD / arrows     — steer ship
+##   Shift             — boost
+##   P / Esc           — pause    M — mute (visual only)
+##   Enter             — start / restart
 
-const GX := 28
-const GY := 28
-const GZ := 12
-const MAX_CELLS := GX * GY * GZ
+const W := 20
+const CHUNK_D := 12
+const N_CHUNKS := 4
+const SPACING := 2.4
+const MAX_AGE := 24
+const BASE_H := 1.2
+const H_PER_AGE := 0.42
+const LIFE_INTERVAL := 0.55
 
-# Rules: survive / birth neighbour counts (26-neighbour 3D Life)
 const RULES := {
-	"Stable 5766": {"survive": [5, 6], "birth": [6, 7]},
-	"Explosive 4555": {"survive": [4, 5], "birth": [5, 6]},
-	"Maze 4565": {"survive": [4, 5, 6], "birth": [5]},
-	"Chaos 345456": {"survive": [3, 4, 5], "birth": [4, 5, 6]},
+	"Conway B3/S23": {"birth": [3], "survive": [2, 3]},
+	"HighLife B36/S23": {"birth": [3, 6], "survive": [2, 3]},
+	"Day & Night": {"birth": [3, 6, 7, 8], "survive": [3, 4, 6, 7, 8]},
 }
 
-var grid := PackedByteArray()
-var next_grid := PackedByteArray()
-var ages := PackedInt32Array()
-var generation := 0
-var population := 0
-var running := true
-var speed := 6.0 # generations per second
-var sim_acc := 0.0
-var rule_name := "Stable 5766"
-var survive_set := {}
+var rule_name := "Conway B3/S23"
 var birth_set := {}
-var brush_size := 2
-var tool := "paint" # paint | erase | bomb | stamp
-var stamp_kind := "glider"
-var auto_orbit := false
+var survive_set := {}
 
-# Camera rig
-var cam_target := Vector3.ZERO
-var cam_radius := 42.0
-var cam_theta := 0.75
-var cam_phi := 1.02
-var cam_desired_target := Vector3.ZERO
-var cam_desired_radius := 42.0
-var cam_desired_theta := 0.75
-var cam_desired_phi := 1.02
-
-var camera: Camera3D
-var multimesh_instance: MultiMeshInstance3D
-var multimesh: MultiMesh
-var picker_body: StaticBody3D
-var gen_label: Label
-var pop_label: Label
-var hint_label: Label
-var play_button: Button
-var speed_slider: HSlider
-var speed_value: Label
-var brush_slider: HSlider
-var brush_value: Label
-var rule_option: OptionButton
-var tool_buttons := {}
-var stamp_option: OptionButton
-var wrap_toggle: CheckBox
-var wrap_edges := true
+var state := "menu" # menu | playing | paused | gameover
+var chunks: Array = []
+var player_z := 0.0
+var ship_x := 0.0
+var ship_y := 6.0
+var target_x := 0.0
+var target_y := 6.0
+var speed := 12.0
+var base_speed := 14.0
+var distance := 0.0
+var bonus_score := 0
+var dna := 0
+var combo := 0
+var combo_timer := 0.0
+var shield := false
+var invuln := 0.0
+var boost_held := false
+var next_shield_at := 700.0
+var last_speed_level := 0
+var menu_time := 0.0
+var orb_timer := 0.0
 var rng := RandomNumberGenerator.new()
 
-func idx(x: int, y: int, z: int) -> int:
-	return (y * GZ + z) * GX + x
+var camera: Camera3D
+var ship: Node3D
+var pillars_mm: MultiMesh
+var ground: MeshInstance3D
+var grid_lines: MeshInstance3D
+var score_label: Label
+var dist_label: Label
+var dna_label: Label
+var speed_label: Label
+var life_label: Label
+var combo_label: Label
+var shield_label: Label
+var warn_label: Label
+var start_panel: Control
+var over_panel: Control
+var pause_panel: Control
+var final_label: Label
+var orbs: Array = []
+var keys_held := {}
 
 func _ready() -> void:
 	rng.randomize()
-	grid.resize(MAX_CELLS)
-	next_grid.resize(MAX_CELLS)
-	ages.resize(MAX_CELLS)
 	_apply_rule(rule_name)
 	_build_world()
 	_build_ui()
-	seed_soup(0.18)
-	_update_hud()
+	reset_world()
+	camera.position = Vector3(0, 9.4, -9.5)
 
 func _apply_rule(rname: String) -> void:
 	rule_name = rname
-	survive_set.clear()
 	birth_set.clear()
-	for v in RULES[rname]["survive"]:
-		survive_set[v] = true
+	survive_set.clear()
 	for v in RULES[rname]["birth"]:
 		birth_set[v] = true
+	for v in RULES[rname]["survive"]:
+		survive_set[v] = true
 
 # ── World building ──────────────────────────────────────────────
 func _build_world() -> void:
@@ -100,71 +98,55 @@ func _build_world() -> void:
 	e.background_color = Color(0.02, 0.024, 0.06)
 	e.fog_enabled = true
 	e.fog_light_color = Color(0.02, 0.024, 0.06)
-	e.fog_density = 0.012
+	e.fog_density = 0.014
 	env.environment = e
 	add_child(env)
 
 	var amb := OmniLight3D.new()
 	amb.light_color = Color(0.53, 0.6, 1.0)
-	amb.light_energy = 0.6
+	amb.light_energy = 0.7
 	add_child(amb)
 
 	var sun := DirectionalLight3D.new()
-	sun.light_energy = 1.2
-	sun.rotation_degrees = Vector3(-50, 30, 0)
+	sun.light_energy = 1.1
+	sun.rotation_degrees = Vector3(-55, 20, 0)
 	add_child(sun)
 
-	var cyan := OmniLight3D.new()
-	cyan.light_color = Color(0.13, 0.83, 0.93)
-	cyan.light_energy = 2.0
-	cyan.omni_range = 90.0
-	add_child(cyan)
-	cyan.name = "CyanLight"
-
-	var mag := OmniLight3D.new()
-	mag.light_color = Color(0.91, 0.47, 0.98)
-	mag.light_energy = 2.0
-	mag.omni_range = 90.0
-	add_child(mag)
-	mag.name = "MagLight"
-
 	camera = Camera3D.new()
-	camera.fov = 55.0
-	camera.far = 600.0
+	camera.fov = 62.0
+	camera.far = 700.0
 	add_child(camera)
 
-	# Floor
-	var floor_mesh := PlaneMesh.new()
-	floor_mesh.size = Vector2(GX, GZ)
-	var floor_mat := StandardMaterial3D.new()
-	floor_mat.albedo_color = Color(0.05, 0.07, 0.16, 0.9)
-	floor_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
-	var floor_inst := MeshInstance3D.new()
-	floor_inst.mesh = floor_mesh
-	floor_inst.material_override = floor_mat
-	floor_inst.position = Vector3(0, -GY * 0.5 - 0.02, 0)
-	add_child(floor_inst)
+	# Ground
+	var plane := PlaneMesh.new()
+	plane.size = Vector2(400, 500)
+	var ground_mat := StandardMaterial3D.new()
+	ground_mat.albedo_color = Color(0.04, 0.05, 0.14)
+	ground = MeshInstance3D.new()
+	ground.mesh = plane
+	ground.material_override = ground_mat
+	add_child(ground)
 
-	# Grid lines via ImmediateMesh
+	# Grid lines
 	var lines := ImmediateMesh.new()
 	lines.surface_begin(Mesh.PRIMITIVE_LINES)
 	var line_mat := StandardMaterial3D.new()
 	line_mat.albedo_color = Color(0.13, 0.83, 0.93, 0.35)
 	line_mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
 	line_mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
-	for i in range(GX + 1):
-		var x := float(i) - GX * 0.5
-		lines.surface_add_vertex(Vector3(x, -GY * 0.5, -GZ * 0.5))
-		lines.surface_add_vertex(Vector3(x, -GY * 0.5, GZ * 0.5))
-	for j in range(GZ + 1):
-		var z := float(j) - GZ * 0.5
-		lines.surface_add_vertex(Vector3(-GX * 0.5, -GY * 0.5, z))
-		lines.surface_add_vertex(Vector3(GX * 0.5, -GY * 0.5, z))
+	for i in range(-40, 41):
+		var x := float(i) * SPACING
+		lines.surface_add_vertex(Vector3(x, 0.02, -120))
+		lines.surface_add_vertex(Vector3(x, 0.02, 120))
+	for j in range(-40, 41):
+		var z := float(j) * SPACING
+		lines.surface_add_vertex(Vector3(-96, 0.02, z))
+		lines.surface_add_vertex(Vector3(96, 0.02, z))
 	lines.surface_end()
-	var lines_inst := MeshInstance3D.new()
-	lines_inst.mesh = lines
-	lines_inst.material_override = line_mat
-	add_child(lines_inst)
+	grid_lines = MeshInstance3D.new()
+	grid_lines.mesh = lines
+	grid_lines.material_override = line_mat
+	add_child(grid_lines)
 
 	# Stars
 	var star_mesh := SphereMesh.new()
@@ -177,40 +159,84 @@ func _build_world() -> void:
 	var star_mm := MultiMesh.new()
 	star_mm.transform_format = MultiMesh.TRANSFORM_3D
 	star_mm.mesh = star_mesh
-	star_mm.instance_count = 300
-	for i in range(300):
-		var dir := Vector3(rng.randf_range(-1, 1), rng.randf_range(-1, 1), rng.randf_range(-1, 1)).normalized()
-		var t := Transform3D(Basis(), dir * rng.randf_range(120.0, 220.0))
-		star_mm.set_instance_transform(i, t)
+	star_mm.instance_count = 250
+	for i in range(250):
+		var pos := Vector3(rng.randf_range(-140, 140), rng.randf_range(-8, 70), rng.randf_range(-30, 220))
+		star_mm.set_instance_transform(i, Transform3D(Basis(), pos))
 	var star_inst := MultiMeshInstance3D.new()
 	star_inst.multimesh = star_mm
+	star_inst.name = "Stars"
 	add_child(star_inst)
 
-	# Cells MultiMesh
+	# Pillars MultiMesh
 	var box := BoxMesh.new()
-	box.size = Vector3(0.9, 0.9, 0.9)
+	box.size = Vector3(1.8, 1.0, 1.8)
 	var box_mat := StandardMaterial3D.new()
 	box_mat.roughness = 0.35
 	box_mat.metallic = 0.15
 	box.material = box_mat
-	multimesh = MultiMesh.new()
-	multimesh.transform_format = MultiMesh.TRANSFORM_3D
-	multimesh.use_colors = true
-	multimesh.mesh = box
-	multimesh.instance_count = MAX_CELLS
-	multimesh_instance = MultiMeshInstance3D.new()
-	multimesh_instance.multimesh = multimesh
-	multimesh_instance.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
-	add_child(multimesh_instance)
+	pillars_mm = MultiMesh.new()
+	pillars_mm.transform_format = MultiMesh.TRANSFORM_3D
+	pillars_mm.use_colors = true
+	pillars_mm.mesh = box
+	pillars_mm.instance_count = W * CHUNK_D * N_CHUNKS
+	var pillars_inst := MultiMeshInstance3D.new()
+	pillars_inst.multimesh = pillars_mm
+	pillars_inst.cast_shadow = GeometryInstance3D.SHADOW_CASTING_SETTING_OFF
+	add_child(pillars_inst)
 
-	# Invisible picker volume for raycasts
-	picker_body = StaticBody3D.new()
-	var shape := CollisionShape3D.new()
-	var box_shape := BoxShape3D.new()
-	box_shape.size = Vector3(GX, GY, GZ)
-	shape.shape = box_shape
-	picker_body.add_child(shape)
-	add_child(picker_body)
+	# Ship: glowing cone + wings + light
+	ship = Node3D.new()
+	var body_mesh := CylinderMesh.new()
+	body_mesh.top_radius = 0.05
+	body_mesh.bottom_radius = 0.55
+	body_mesh.height = 2.4
+	var body_mat := StandardMaterial3D.new()
+	body_mat.albedo_color = Color(0.13, 0.83, 0.93)
+	body_mat.emission_enabled = true
+	body_mat.emission = Color(0.13, 0.83, 0.93)
+	body_mat.emission_energy_multiplier = 0.8
+	var body := MeshInstance3D.new()
+	body.mesh = body_mesh
+	body.material_override = body_mat
+	body.rotation_degrees = Vector3(90, 0, 0)
+	ship.add_child(body)
+	var wing_mesh := BoxMesh.new()
+	wing_mesh.size = Vector3(2.2, 0.12, 0.9)
+	var wing_mat := StandardMaterial3D.new()
+	wing_mat.albedo_color = Color(0.91, 0.47, 0.98)
+	wing_mat.emission_enabled = true
+	wing_mat.emission = Color(0.91, 0.47, 0.98)
+	wing_mat.emission_energy_multiplier = 0.6
+	var wings := MeshInstance3D.new()
+	wings.mesh = wing_mesh
+	wings.material_override = wing_mat
+	wings.position = Vector3(0, 0, -0.7)
+	ship.add_child(wings)
+	var ship_light := OmniLight3D.new()
+	ship_light.light_color = Color(0.13, 0.83, 0.93)
+	ship_light.light_energy = 2.0
+	ship_light.omni_range = 30.0
+	ship_light.position = Vector3(0, 0.5, -1)
+	ship.add_child(ship_light)
+	add_child(ship)
+
+	# Orb pool
+	var orb_mesh := SphereMesh.new()
+	orb_mesh.radius = 0.55
+	orb_mesh.height = 1.1
+	for i in range(20):
+		var m := MeshInstance3D.new()
+		m.mesh = orb_mesh
+		var mat := StandardMaterial3D.new()
+		mat.albedo_color = Color(0.13, 0.83, 0.93)
+		mat.emission_enabled = true
+		mat.emission = Color(0.13, 0.83, 0.93)
+		mat.emission_energy_multiplier = 2.0
+		m.material_override = mat
+		m.visible = false
+		add_child(m)
+		orbs.append({"mesh": m, "active": false, "shield": false, "base_y": 4.0, "phase": rng.randf_range(0.0, 6.28)})
 
 func _build_ui() -> void:
 	var layer := CanvasLayer.new()
@@ -225,510 +251,642 @@ func _build_ui() -> void:
 	top.offset_left = 12
 	top.offset_top = 10
 	top.offset_right = -12
-	top.add_theme_constant_override("separation", 10)
+	top.add_theme_constant_override("separation", 12)
 	root.add_child(top)
 
 	var title := Label.new()
-	title.text = "🧬 EVOLUTION EXPLORER"
-	title.add_theme_font_size_override("font_size", 18)
+	title.text = "🚀 EVOLUTION EXPLORER"
+	title.add_theme_font_size_override("font_size", 16)
 	top.add_child(title)
 
-	gen_label = Label.new()
-	gen_label.text = "GEN 0"
-	top.add_child(gen_label)
-	pop_label = Label.new()
-	pop_label.text = "POP 0"
-	top.add_child(pop_label)
+	score_label = _stat("SCORE 0")
+	dist_label = _stat("0m")
+	dna_label = _stat("🧬 0")
+	speed_label = _stat("SPD 0")
+	combo_label = _stat("×1")
+	shield_label = _stat("🛡️")
+	shield_label.visible = false
+	for l in [score_label, dist_label, dna_label, speed_label, combo_label, shield_label]:
+		top.add_child(l)
 
-	var spacer := Control.new()
-	spacer.size_flags_horizontal = Control.SIZE_EXPAND_FILL
-	top.add_child(spacer)
+	life_label = Label.new()
+	life_label.set_anchors_preset(Control.PRESET_TOP_WIDE)
+	life_label.offset_left = 12
+	life_label.offset_top = 44
+	life_label.add_theme_font_size_override("font_size", 12)
+	life_label.add_theme_color_override("font_color", Color(0.55, 0.58, 0.72))
+	root.add_child(life_label)
 
-	play_button = Button.new()
-	play_button.text = "⏸ Pause"
-	play_button.pressed.connect(_toggle_play)
-	top.add_child(play_button)
+	warn_label = Label.new()
+	warn_label.text = "⚠️ STAGNATION DETECTED — PILLARS EXPLODING!"
+	warn_label.set_anchors_preset(Control.PRESET_CENTER_TOP)
+	warn_label.offset_top = 80
+	warn_label.offset_left = -260
+	warn_label.offset_right = 260
+	warn_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	warn_label.add_theme_color_override("font_color", Color(1.0, 0.6, 0.65))
+	warn_label.visible = false
+	root.add_child(warn_label)
 
-	var clear_btn := Button.new()
-	clear_btn.text = "🗑 Clear"
-	clear_btn.pressed.connect(func() -> void:
-		clear_world()
-		_update_hud()
-	)
-	top.add_child(clear_btn)
+	var hint := Label.new()
+	hint.text = "🖱️ Move mouse to steer • WASD steer • Shift boost • P pause"
+	hint.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
+	hint.offset_left = -280
+	hint.offset_right = 280
+	hint.offset_top = -40
+	hint.offset_bottom = -12
+	hint.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	hint.add_theme_color_override("font_color", Color(0.55, 0.58, 0.72))
+	root.add_child(hint)
 
-	var random_btn := Button.new()
-	random_btn.text = "🎲 Random"
-	random_btn.pressed.connect(func() -> void:
-		seed_soup(0.18)
-		_update_hud()
-	)
-	top.add_child(random_btn)
-
-	var step_btn := Button.new()
-	step_btn.text = "⏭ Step"
-	step_btn.pressed.connect(func() -> void:
-		step_simulation()
-		_update_hud()
-	)
-	top.add_child(step_btn)
-
-	# Left panel
-	var left := VBoxContainer.new()
-	left.set_anchors_preset(Control.PRESET_CENTER_LEFT)
-	left.offset_left = 12
-	left.offset_top = -160
-	left.offset_bottom = 160
-	left.add_theme_constant_override("separation", 6)
-	root.add_child(left)
-
-	left.add_child(_panel_title("TOOLS"))
-	for entry in [["paint", "🖌️ Paint (1)"], ["erase", "🧽 Erase (2)"], ["bomb", "💣 Bomb (3)"], ["stamp", "🔷 Stamp (4)"]]:
-		var b := Button.new()
-		b.text = entry[1]
-		b.toggle_mode = true
-		b.pressed.connect(_on_tool_pressed.bind(entry[0]))
-		tool_buttons[entry[0]] = b
-		left.add_child(b)
-	tool_buttons["paint"].button_pressed = true
-
-	stamp_option = OptionButton.new()
-	for s in ["glider", "lwss", "pulsar", "acorn", "rpent", "gun", "cube", "helix"]:
-		stamp_option.add_item(s)
-	stamp_option.item_selected.connect(func(i: int) -> void: stamp_kind = stamp_option.get_item_text(i))
-	left.add_child(stamp_option)
-
-	brush_slider = HSlider.new()
-	brush_slider.min_value = 1
-	brush_slider.max_value = 6
-	brush_slider.step = 1
-	brush_slider.value = 2
-	brush_slider.value_changed.connect(func(v: float) -> void:
-		brush_size = int(v)
-		brush_value.text = "Brush: %d" % brush_size
-	)
-	left.add_child(brush_slider)
-	brush_value = Label.new()
-	brush_value.text = "Brush: 2"
-	left.add_child(brush_value)
-
-	# Right panel
-	var right := VBoxContainer.new()
-	right.set_anchors_preset(Control.PRESET_CENTER_RIGHT)
-	right.offset_right = -12
-	right.offset_top = -160
-	right.offset_bottom = 160
-	right.add_theme_constant_override("separation", 6)
-	root.add_child(right)
-
-	right.add_child(_panel_title("RULES"))
-	rule_option = OptionButton.new()
+	# Start panel
+	start_panel = _make_panel(root, "🚀 EVOLUTION EXPLORER",
+		"Fly through pillars grown by the Game of Life.\nHeight = how long cells have lived.\nOld pillars explode — and so do stagnant, repeating patterns.\n\n🖱️ Move mouse to steer • WASD • Shift boost\n🧬 Collect DNA orbs • skim pillars for near-miss bonuses\n💥 Young = short = safe. Old = tall = deadly.",
+		"▶ TAKE OFF", func() -> void: start_game())
+	var rule_opt := OptionButton.new()
 	for rname in RULES.keys():
-		rule_option.add_item(rname)
-	rule_option.item_selected.connect(func(i: int) -> void: _apply_rule(rule_option.get_item_text(i)))
-	right.add_child(rule_option)
+		rule_opt.add_item(rname)
+	rule_opt.item_selected.connect(func(i: int) -> void: _apply_rule(rule_opt.get_item_text(i)))
+	rule_opt.set_anchors_preset(Control.PRESET_CENTER)
+	rule_opt.offset_left = -110
+	rule_opt.offset_right = 110
+	rule_opt.offset_top = 120
+	rule_opt.offset_bottom = 152
+	start_panel.add_child(rule_opt)
 
-	wrap_toggle = CheckBox.new()
-	wrap_toggle.text = "Wrap edges"
-	wrap_toggle.button_pressed = true
-	wrap_toggle.toggled.connect(func(on: bool) -> void: wrap_edges = on)
-	right.add_child(wrap_toggle)
+	# Game over panel
+	over_panel = _make_panel(root, "💥 CRASHED!", "", "↻ FLY AGAIN", func() -> void: start_game())
+	final_label = Label.new()
+	final_label.set_anchors_preset(Control.PRESET_CENTER)
+	final_label.offset_left = -200
+	final_label.offset_right = 200
+	final_label.offset_top = 40
+	final_label.offset_bottom = 110
+	final_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	final_label.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+	over_panel.add_child(final_label)
+	over_panel.visible = false
 
-	var orbit_toggle := CheckBox.new()
-	orbit_toggle.text = "Auto-orbit"
-	orbit_toggle.toggled.connect(func(on: bool) -> void: auto_orbit = on)
-	right.add_child(orbit_toggle)
+	# Pause panel
+	pause_panel = _make_panel(root, "⏸ PAUSED", "The pillars wait for no one… except now.",
+		"▶ RESUME", func() -> void: toggle_pause())
+	pause_panel.visible = false
 
-	speed_slider = HSlider.new()
-	speed_slider.min_value = 1
-	speed_slider.max_value = 30
-	speed_slider.step = 1
-	speed_slider.value = 6
-	speed_slider.value_changed.connect(func(v: float) -> void:
-		speed = v
-		speed_value.text = "Speed: %d gen/s" % int(v)
-	)
-	right.add_child(speed_slider)
-	speed_value = Label.new()
-	speed_value.text = "Speed: 6 gen/s"
-	right.add_child(speed_value)
-
-	hint_label = Label.new()
-	hint_label.text = "🖌️ Paint life — drag on the world. Right-drag to orbit, scroll to zoom."
-	hint_label.set_anchors_preset(Control.PRESET_CENTER_BOTTOM)
-	hint_label.offset_left = -320
-	hint_label.offset_right = 320
-	hint_label.offset_top = -44
-	hint_label.offset_bottom = -12
-	hint_label.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
-	root.add_child(hint_label)
-
-func _panel_title(t: String) -> Label:
+func _stat(t: String) -> Label:
 	var l := Label.new()
 	l.text = t
-	l.add_theme_font_size_override("font_size", 12)
-	l.add_theme_color_override("font_color", Color(0.55, 0.58, 0.72))
+	l.add_theme_font_size_override("font_size", 15)
 	return l
 
-func _on_tool_pressed(t: String) -> void:
-	tool = t
-	for key in tool_buttons.keys():
-		tool_buttons[key].button_pressed = (key == t)
-	var hints := {
-		"paint": "🖌️ Paint life — drag on the world. Right-drag to orbit, scroll to zoom.",
-		"erase": "🧽 Erase — drag to remove life. Right-drag to orbit.",
-		"bomb": "💣 Bomb — click/drag to blast a crater.",
-		"stamp": "🔷 Stamp — pick a pattern, then click the world to place it.",
+func _make_panel(parent: Control, title: String, body: String, btn_text: String, on_press: Callable) -> Control:
+	var dim := ColorRect.new()
+	dim.color = Color(0.01, 0.015, 0.05, 0.75)
+	dim.set_anchors_preset(Control.PRESET_FULL_RECT)
+	parent.add_child(dim)
+	var card := PanelContainer.new()
+	card.set_anchors_preset(Control.PRESET_CENTER)
+	card.offset_left = -260
+	card.offset_right = 260
+	card.offset_top = -230
+	card.offset_bottom = 230
+	dim.add_child(card)
+	var v := VBoxContainer.new()
+	v.add_theme_constant_override("separation", 14)
+	card.add_child(v)
+	var t := Label.new()
+	t.text = title
+	t.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+	t.add_theme_font_size_override("font_size", 30)
+	v.add_child(t)
+	if body != "":
+		var b := Label.new()
+		b.text = body
+		b.horizontal_alignment = HORIZONTAL_ALIGNMENT_CENTER
+		b.autowrap_mode = TextServer.AUTOWRAP_WORD_SMART
+		b.add_theme_color_override("font_color", Color(0.6, 0.64, 0.8))
+		v.add_child(b)
+	var btn := Button.new()
+	btn.text = btn_text
+	btn.custom_minimum_size = Vector2(220, 48)
+	btn.pressed.connect(on_press)
+	var center := CenterContainer.new()
+	center.add_child(btn)
+	v.add_child(center)
+	return dim
+
+# ── Life chunks ─────────────────────────────────────────────────
+func _idx(x: int, z: int) -> int:
+	return z * W + x
+
+func _make_chunk(z_start: float) -> Dictionary:
+	var ch := {
+		"z_start": z_start,
+		"grid": PackedByteArray(),
+		"next": PackedByteArray(),
+		"age": PackedInt32Array(),
+		"heights": PackedFloat32Array(),
+		"targets": PackedFloat32Array(),
+		"near_cd": PackedFloat32Array(),
+		"gen": 0,
+		"pop": 0,
+		"oldest": 0,
+		"timer": rng.randf_range(0.0, LIFE_INTERVAL),
+		"hashes": [],
 	}
-	hint_label.text = hints.get(t, "")
+	ch["grid"].resize(W * CHUNK_D)
+	ch["next"].resize(W * CHUNK_D)
+	ch["age"].resize(W * CHUNK_D)
+	ch["heights"].resize(W * CHUNK_D)
+	ch["targets"].resize(W * CHUNK_D)
+	ch["near_cd"].resize(W * CHUNK_D)
+	_seed_chunk(ch)
+	return ch
 
-func _toggle_play() -> void:
-	running = not running
-	play_button.text = "▶ Play" if not running else "⏸ Pause"
-
-# ── Simulation ──────────────────────────────────────────────────
-func count_neighbors(x: int, y: int, z: int) -> int:
-	var n := 0
-	for dy in range(-1, 2):
-		for dz in range(-1, 2):
-			for dx in range(-1, 2):
-				if dx == 0 and dy == 0 and dz == 0:
-					continue
-				var nx := x + dx
-				var ny := y + dy
-				var nz := z + dz
-				if wrap_edges:
-					nx = posmod(nx, GX)
-					ny = posmod(ny, GY)
-					nz = posmod(nz, GZ)
-				elif nx < 0 or ny < 0 or nz < 0 or nx >= GX or ny >= GY or nz >= GZ:
-					continue
-				if grid[idx(nx, ny, nz)] == 1:
-					n += 1
-	return n
-
-func step_simulation() -> void:
-	for y in range(GY):
-		for z in range(GZ):
-			for x in range(GX):
-				var i := idx(x, y, z)
-				var alive := grid[i] == 1
-				var n := count_neighbors(x, y, z)
-				var next := false
-				if alive:
-					next = survive_set.has(n)
-				else:
-					next = birth_set.has(n)
-				next_grid[i] = 1 if next else 0
-				if next:
-					if not alive:
-						ages[i] = 0
-					else:
-						ages[i] += 1
-	var tmp := grid
-	grid = next_grid
-	next_grid = tmp
-	generation += 1
-	_recount()
-
-func _recount() -> void:
-	var p := 0
-	for i in range(MAX_CELLS):
-		if grid[i] == 1:
-			p += 1
-	population = p
-
-func clear_world() -> void:
+func _seed_chunk(ch: Dictionary) -> void:
+	var grid: PackedByteArray = ch["grid"]
+	var age: PackedInt32Array = ch["age"]
 	grid.fill(0)
-	ages.fill(0)
-	generation = 0
-	population = 0
-
-func seed_soup(density: float) -> void:
-	clear_world()
-	for i in range(MAX_CELLS):
+	age.fill(0)
+	ch["gen"] = 0
+	ch["hashes"] = []
+	var density := rng.randf_range(0.20, 0.27)
+	for i in range(grid.size()):
 		if rng.randf() < density:
 			grid[i] = 1
-			ages[i] = rng.randi_range(0, 3)
-	_recount()
+			age[i] = rng.randi_range(0, 3)
+	var patterns := {
+		"glider": [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]],
+		"acorn": [[1, 0], [3, 0], [0, 1], [3, 1], [4, 1], [5, 1], [6, 1]],
+		"rpent": [[1, 0], [2, 0], [0, 1], [1, 1], [1, 2]],
+		"lwss": [[1, 0], [3, 0], [0, 1], [4, 1], [0, 2], [1, 2], [2, 2], [3, 2]],
+	}
+	var keys := patterns.keys()
+	var n_pat := rng.randi_range(1, 2)
+	for p in range(n_pat):
+		var pat: Array = patterns[keys[rng.randi_range(0, keys.size() - 1)]]
+		var ox := rng.randi_range(2, W - 9)
+		var oz := rng.randi_range(2, CHUNK_D - 5)
+		for cell in pat:
+			var x: int = (ox + cell[0]) % W
+			var z: int = oz + cell[1]
+			if z < CHUNK_D:
+				var i := _idx(x, z)
+				grid[i] = 1
+				age[i] = 0
+	_refresh_targets(ch)
+	var heights: PackedFloat32Array = ch["heights"]
+	var targets: PackedFloat32Array = ch["targets"]
+	for i in range(heights.size()):
+		heights[i] = targets[i]
+	_recount(ch)
 
-func set_cell(x: int, y: int, z: int, v: int) -> void:
-	if wrap_edges:
-		x = posmod(x, GX)
-		y = posmod(y, GY)
-		z = posmod(z, GZ)
-	elif x < 0 or y < 0 or z < 0 or x >= GX or y >= GY or z >= GZ:
-		return
-	var i := idx(x, y, z)
-	grid[i] = v
-	if v == 1:
-		ages[i] = 0
+func _refresh_targets(ch: Dictionary) -> void:
+	var grid: PackedByteArray = ch["grid"]
+	var age: PackedInt32Array = ch["age"]
+	var targets: PackedFloat32Array = ch["targets"]
+	for i in range(grid.size()):
+		targets[i] = (BASE_H + float(age[i]) * H_PER_AGE) if grid[i] == 1 else 0.0
 
-func stamp_pattern(kind: String, cx: int, cy: int, cz: int) -> void:
-	var cells := _pattern_cells(kind)
-	var ox := cx - 3
-	var oz := cz - 3
-	for c in cells:
-		set_cell(ox + c[0], cy + c[1], oz + c[2], 1)
-	_recount()
+func _recount(ch: Dictionary) -> void:
+	var grid: PackedByteArray = ch["grid"]
+	var age: PackedInt32Array = ch["age"]
+	var pop := 0
+	var oldest := 0
+	for i in range(grid.size()):
+		if grid[i] == 1:
+			pop += 1
+			oldest = maxi(oldest, age[i])
+	ch["pop"] = pop
+	ch["oldest"] = oldest
 
-func _pattern_cells(kind: String) -> Array:
-	match kind:
-		"glider":
-			return [[1, 0, 0], [2, 0, 1], [0, 0, 2], [1, 0, 2], [2, 0, 2]]
-		"lwss":
-			return [[1, 0, 0], [3, 0, 0], [0, 0, 1], [4, 0, 1], [0, 0, 2], [1, 0, 2], [2, 0, 2], [3, 0, 2]]
-		"acorn":
-			return [[1, 0, 0], [3, 0, 0], [0, 0, 1], [3, 0, 1], [4, 0, 1], [5, 0, 1], [6, 0, 1]]
-		"rpent":
-			return [[1, 0, 0], [2, 0, 0], [0, 0, 1], [1, 0, 1], [1, 0, 2]]
-		"pulsar":
-			var cells: Array = []
-			var rows := {0: [2, 3, 4, 10, 11, 12], 2: [0, 5, 7, 12], 3: [0, 5, 7, 12], 4: [0, 5, 7, 12], 5: [2, 3, 4, 10, 11, 12], 7: [2, 3, 4, 10, 11, 12], 8: [0, 5, 7, 12], 9: [0, 5, 7, 12], 10: [0, 5, 7, 12], 12: [2, 3, 4, 10, 11, 12]}
-			for r in rows.keys():
-				for c in rows[r]:
-					cells.append([c, 0, r])
-			return cells
-		"gun":
-			var pts := [[1, 5], [2, 5], [1, 6], [2, 6], [11, 5], [11, 6], [11, 7], [12, 4], [12, 8], [13, 3], [13, 9], [14, 3], [14, 9], [15, 6], [16, 2], [16, 10], [17, 2], [17, 10], [18, 6], [19, 1], [19, 11], [20, 1], [20, 11], [21, 2], [21, 10], [22, 3], [22, 9], [23, 4], [23, 8], [24, 5], [24, 6], [24, 7], [35, 3], [35, 4], [36, 2], [36, 6], [37, 2], [37, 6], [38, 3], [38, 4]]
-			var cells: Array = []
-			for p in pts:
-				cells.append([p[0], 0, p[1]])
-			return cells
-		"cube":
-			var cells: Array = []
-			for x in range(3):
-				for y in range(3):
-					for z in range(3):
-						cells.append([x, y, z])
-			return cells
-		"helix":
-			var cells: Array = []
-			for i in range(22):
-				var a := float(i) * 0.55
-				cells.append([int(round(3.0 + 2.4 * cos(a))), i, int(round(3.0 + 2.4 * sin(a)))])
-				cells.append([int(round(3.0 + 2.4 * cos(a + PI))), i, int(round(3.0 + 2.4 * sin(a + PI)))])
-				if i % 2 == 0:
-					cells.append([3, i, 3])
-			return cells
-	return []
+func _hash_grid(grid: PackedByteArray) -> int:
+	var h := 2166136261
+	for i in range(grid.size()):
+		h = h ^ grid[i]
+		h = int((h * 16777619) & 0xFFFFFFFF)
+	return h
+
+func _cell_world(ch: Dictionary, gx: int, gz: int) -> Vector2:
+	return Vector2(float(gx) * SPACING - float(W) * SPACING * 0.5 + SPACING * 0.5, float(ch["z_start"]) + float(gz) * SPACING + SPACING * 0.5)
+
+func _explode_cell(ch: Dictionary, gx: int, gz: int) -> void:
+	var i := _idx(gx, gz)
+	var grid: PackedByteArray = ch["grid"]
+	var age: PackedInt32Array = ch["age"]
+	var targets: PackedFloat32Array = ch["targets"]
+	grid[i] = 0
+	age[i] = 0
+	targets[i] = 0.0
+	var w := _cell_world(ch, gx, gz)
+	_spawn_burst(Vector3(w.x, 4.0, w.y), Color(0.91, 0.47, 0.98), 14)
+
+func _step_life(ch: Dictionary) -> void:
+	var grid: PackedByteArray = ch["grid"]
+	var next: PackedByteArray = ch["next"]
+	var age: PackedInt32Array = ch["age"]
+	for gz in range(CHUNK_D):
+		for gx in range(W):
+			var n := 0
+			for dz in range(-1, 2):
+				for dx in range(-1, 2):
+					if dx == 0 and dz == 0:
+						continue
+					var nx := posmod(gx + dx, W)
+					var nz := gz + dz
+					if nz < 0 or nz >= CHUNK_D:
+						continue
+					if grid[_idx(nx, nz)] == 1:
+						n += 1
+			var i := _idx(gx, gz)
+			if grid[i] == 1:
+				next[i] = 1 if survive_set.has(n) else 0
+			else:
+				next[i] = 1 if birth_set.has(n) else 0
+	for i in range(grid.size()):
+		if next[i] == 1:
+			if grid[i] == 0:
+				age[i] = 0
+			else:
+				age[i] += 1
+			if age[i] >= MAX_AGE:
+				next[i] = 0
+		else:
+			age[i] = 0
+	ch["grid"] = next
+	ch["next"] = grid
+	ch["gen"] = int(ch["gen"]) + 1
+	_refresh_targets(ch)
+	_recount(ch)
+	# Stagnation / repeat detection
+	var h := _hash_grid(ch["grid"])
+	var hashes: Array = ch["hashes"]
+	var repeated := hashes.has(h)
+	hashes.append(h)
+	while hashes.size() > 4:
+		hashes.pop_front()
+	ch["hashes"] = hashes
+	if repeated and int(ch["gen"]) > 6 and int(ch["pop"]) > 8:
+		var count := 0
+		for gz in range(CHUNK_D):
+			for gx in range(W):
+				var i := _idx(gx, gz)
+				var g: PackedByteArray = ch["grid"]
+				var a: PackedInt32Array = ch["age"]
+				if g[i] == 1 and a[i] >= 4:
+					_explode_cell(ch, gx, gz)
+					count += 1
+		if count > 0:
+			_refresh_targets(ch)
+			_recount(ch)
+			bonus_score += mini(200, count * 10)
+			warn_label.visible = true
+			get_tree().create_timer(2.5).timeout.connect(func() -> void: warn_label.visible = false)
+		ch["hashes"] = []
+	if int(ch["pop"]) == 0:
+		_seed_chunk(ch)
+
+func _update_chunks(dt: float) -> void:
+	while chunks.size() > 0 and float(chunks[0]["z_start"]) + float(CHUNK_D) * SPACING < player_z - 30.0:
+		chunks.pop_front()
+	while chunks.size() < N_CHUNKS:
+		var last: Dictionary = chunks[chunks.size() - 1]
+		chunks.append(_make_chunk(float(last["z_start"]) + float(CHUNK_D) * SPACING))
+	for ch in chunks:
+		ch["timer"] = float(ch["timer"]) + dt
+		if float(ch["timer"]) >= LIFE_INTERVAL:
+			ch["timer"] = 0.0
+			_step_life(ch)
 
 # ── Rendering ───────────────────────────────────────────────────
 func _age_color(a: int) -> Color:
-	if a == 0:
-		return Color.from_hsv(0.52, 1.0, 0.95)
+	if a >= MAX_AGE - 3:
+		return Color(1.0, 0.95, 0.9)
+	elif a == 0:
+		return Color.from_hsv(0.52, 1.0, 0.85)
 	elif a == 1:
-		return Color.from_hsv(0.46, 0.95, 0.75)
+		return Color.from_hsv(0.46, 0.95, 0.72)
 	elif a <= 3:
-		return Color.from_hsv(0.30, 0.9, 0.7)
+		return Color.from_hsv(0.30, 0.9, 0.66)
 	elif a <= 7:
-		return Color.from_hsv(0.10, 0.95, 0.7)
+		return Color.from_hsv(0.10, 0.95, 0.66)
 	elif a <= 14:
-		return Color.from_hsv(0.86, 0.9, 0.75)
-	return Color.from_hsv(0.74, 0.85, 0.8)
+		return Color.from_hsv(0.86, 0.9, 0.72)
+	return Color.from_hsv(0.74, 0.85, 0.78)
 
-func _render_cells() -> void:
+func _render_pillars(dt: float) -> void:
 	var n := 0
-	for y in range(GY):
-		for z in range(GZ):
-			for x in range(GX):
-				var i := idx(x, y, z)
-				if grid[i] != 1:
+	var grow_k := minf(1.0, dt * 5.5)
+	for ch in chunks:
+		var heights: PackedFloat32Array = ch["heights"]
+		var targets: PackedFloat32Array = ch["targets"]
+		var age: PackedInt32Array = ch["age"]
+		for gz in range(CHUNK_D):
+			for gx in range(W):
+				var i := _idx(gx, gz)
+				heights[i] += (targets[i] - heights[i]) * grow_k
+				var h := heights[i]
+				if h < 0.06:
 					continue
-				var pos := Vector3(float(x) - GX * 0.5 + 0.5, float(y) - GY * 0.5 + 0.5, float(z) - GZ * 0.5 + 0.5)
-				multimesh.set_instance_transform(n, Transform3D(Basis(), pos))
-				var c := _age_color(ages[i])
-				var shade := 0.72 + 0.28 * (float(y) / float(GY))
-				multimesh.set_instance_color(n, Color(c.r * shade, c.g * shade, c.b * shade))
+				var w := _cell_world(ch, gx, gz)
+				var basis := Basis.from_scale(Vector3(1.0, h, 1.0))
+				pillars_mm.set_instance_transform(n, Transform3D(basis, Vector3(w.x, h * 0.5, w.y)))
+				pillars_mm.set_instance_color(n, _age_color(age[i]))
 				n += 1
-	multimesh.visible_instance_count = n
+	pillars_mm.visible_instance_count = n
+
+func _spawn_burst(pos: Vector3, color: Color, amount: int) -> void:
+	var p := CPUParticles3D.new()
+	p.amount = amount
+	p.one_shot = true
+	p.explosiveness = 0.9
+	p.lifetime = 0.8
+	p.emission_shape = CPUParticles3D.EMISSION_SHAPE_SPHERE
+	p.emission_sphere_radius = 0.6
+	p.direction = Vector3(0, 1, 0)
+	p.spread = 180.0
+	p.initial_velocity_min = 3.0
+	p.initial_velocity_max = 7.0
+	p.gravity = Vector3(0, -4, 0)
+	p.color = color
+	var mesh := SphereMesh.new()
+	mesh.radius = 0.12
+	mesh.height = 0.24
+	var mat := StandardMaterial3D.new()
+	mat.albedo_color = color
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mesh.material = mat
+	p.mesh = mesh
+	p.position = pos
+	add_child(p)
+	p.emitting = true
+	get_tree().create_timer(1.2).timeout.connect(func() -> void: if is_instance_valid(p): p.queue_free())
+
+# ── Orbs ────────────────────────────────────────────────────────
+func _spawn_orb(is_shield: bool) -> void:
+	for o in orbs:
+		if o["active"]:
+			continue
+		for tries in range(12):
+			var ch: Dictionary = chunks[rng.randi_range(0, chunks.size() - 1)]
+			var gx := rng.randi_range(0, W - 1)
+			var gz := rng.randi_range(0, CHUNK_D - 1)
+			var w := _cell_world(ch, gx, gz)
+			if w.y < player_z + 18.0 or w.y > player_z + 130.0:
+				continue
+			o["active"] = true
+			o["shield"] = is_shield
+			var m: MeshInstance3D = o["mesh"]
+			m.visible = true
+			var mat := m.material_override as StandardMaterial3D
+			var col := Color(1.0, 0.75, 0.14) if is_shield else Color(0.13, 0.83, 0.93)
+			mat.albedo_color = col
+			mat.emission = col
+			o["base_y"] = rng.randf_range(2.5, 9.5)
+			m.position = Vector3(w.x, o["base_y"], w.y)
+			return
+		return
+
+func _check_orbs(dt: float) -> void:
+	for o in orbs:
+		if not o["active"]:
+			continue
+		var m: MeshInstance3D = o["mesh"]
+		m.rotation.y += dt * 2.4
+		m.position.y = float(o["base_y"]) + sin(Time.get_ticks_msec() / 400.0 + float(o["phase"])) * 0.4
+		if state != "playing":
+			continue
+		if m.position.distance_to(ship.position) < 1.9:
+			o["active"] = false
+			m.visible = false
+			if o["shield"]:
+				shield = true
+				shield_label.visible = true
+			else:
+				combo += 1
+				combo_timer = 4.0
+				dna += 1
+				bonus_score += 50 * maxi(1, combo)
+				_spawn_burst(m.position, Color(0.13, 0.83, 0.93), 10)
+
+# ── Collision ───────────────────────────────────────────────────
+func _check_collisions() -> void:
+	if state != "playing" or invuln > 0.0:
+		return
+	if ship_y < 1.0:
+		_crash("You flew into the ground!")
+		return
+	for ch in chunks:
+		if float(ch["z_start"]) > player_z + 4.0 or float(ch["z_start"]) + float(CHUNK_D) * SPACING < player_z - 4.0:
+			continue
+		var targets: PackedFloat32Array = ch["targets"]
+		var near_cd: PackedFloat32Array = ch["near_cd"]
+		for gz in range(CHUNK_D):
+			for gx in range(W):
+				var i := _idx(gx, gz)
+				var h := targets[i]
+				if h < 1.0:
+					continue
+				var w := _cell_world(ch, gx, gz)
+				var dx := absf(ship_x - w.x)
+				var dz := absf(player_z - w.y)
+				if dx < 1.15 and dz < 1.15 and ship_y < h - 0.3:
+					_crash("You hit a pillar!")
+					return
+				if near_cd[i] <= 0.0 and dx < 2.3 and dz < 2.3 and ship_y < h + 1.6 and ship_y >= h - 0.3:
+					near_cd[i] = 2.5
+					combo += 1
+					combo_timer = 4.0
+					dna += 2
+					bonus_score += 100 * maxi(1, combo)
+					_spawn_burst(Vector3(ship_x, ship_y, player_z), Color(1.0, 0.75, 0.14), 8)
+
+func _crash(msg: String) -> void:
+	if shield:
+		shield = false
+		invuln = 2.5
+		shield_label.visible = false
+		_spawn_burst(ship.position, Color(1.0, 0.75, 0.14), 40)
+		return
+	state = "gameover"
+	ship.visible = false
+	_spawn_burst(ship.position, Color(0.13, 0.83, 0.93), 60)
+	_spawn_burst(ship.position, Color(0.91, 0.47, 0.98), 40)
+	var final_score := int(distance * 2.0) + bonus_score
+	final_label.text = "Score: %d\nDistance: %dm\nDNA: %d" % [final_score, int(distance), dna]
+	over_panel.visible = true
+
+# ── Game flow ───────────────────────────────────────────────────
+func reset_world() -> void:
+	chunks.clear()
+	var z := -28.0
+	for i in range(N_CHUNKS):
+		chunks.append(_make_chunk(z))
+		z += float(CHUNK_D) * SPACING
+	player_z = 0.0
+	ship_x = 0.0
+	ship_y = 6.0
+	target_x = 0.0
+	target_y = 6.0
+	distance = 0.0
+	bonus_score = 0
+	dna = 0
+	combo = 0
+	combo_timer = 0.0
+	shield = false
+	invuln = 0.0
+	next_shield_at = 700.0
+	last_speed_level = 0
+	base_speed = 14.0
+	speed = 12.0
+	for o in orbs:
+		o["active"] = false
+		(o["mesh"] as MeshInstance3D).visible = false
+	ship.visible = true
+	shield_label.visible = false
+	warn_label.visible = false
+	_update_hud()
+
+func start_game() -> void:
+	reset_world()
+	state = "playing"
+	start_panel.visible = false
+	over_panel.visible = false
+	pause_panel.visible = false
+
+func toggle_pause() -> void:
+	if state == "playing":
+		state = "paused"
+		pause_panel.visible = true
+	elif state == "paused":
+		state = "playing"
+		pause_panel.visible = false
 
 func _update_hud() -> void:
-	gen_label.text = "GEN %d" % generation
-	pop_label.text = "POP %d" % population
+	score_label.text = "SCORE %d" % (int(distance * 2.0) + bonus_score)
+	dist_label.text = "%dm" % int(distance)
+	dna_label.text = "🧬 %d" % dna
+	speed_label.text = "SPD %d" % int(speed)
+	combo_label.text = "×%d" % maxi(1, combo)
+	var gen := 0
+	var pop := 0
+	var oldest := 0
+	for ch in chunks:
+		gen += int(ch["gen"])
+		pop += int(ch["pop"])
+		oldest = maxi(oldest, int(ch["oldest"]))
+	life_label.text = "Life (%s): Gen %d · Pop %d · Oldest %d" % [rule_name, gen, pop, oldest]
 
 # ── Input ───────────────────────────────────────────────────────
-var _drag_mode := ""
-var _last_mouse := Vector2.ZERO
-var _last_tool_ms := 0
-
 func _unhandled_input(event: InputEvent) -> void:
-	if event is InputEventMouseButton:
-		var mb := event as InputEventMouseButton
-		if mb.button_index == MOUSE_BUTTON_WHEEL_UP and mb.pressed:
-			if Input.is_key_pressed(KEY_SHIFT):
-				brush_size = clampi(brush_size + 1, 1, 6)
-				brush_slider.value = brush_size
-				brush_value.text = "Brush: %d" % brush_size
-			else:
-				cam_desired_radius *= 0.9
-		elif mb.button_index == MOUSE_BUTTON_WHEEL_DOWN and mb.pressed:
-			if Input.is_key_pressed(KEY_SHIFT):
-				brush_size = clampi(brush_size - 1, 1, 6)
-				brush_slider.value = brush_size
-				brush_value.text = "Brush: %d" % brush_size
-			else:
-				cam_desired_radius *= 1.1
-		elif mb.button_index == MOUSE_BUTTON_LEFT:
-			if mb.pressed:
-				_last_mouse = mb.position
-				var v := _pick_voxel(mb.position)
-				if v != Vector3i(-1, -1, -1):
-					_drag_mode = "paint"
-					_apply_tool(v)
-				else:
-					_drag_mode = "orbit"
-			else:
-				_drag_mode = ""
-		elif mb.button_index == MOUSE_BUTTON_RIGHT or mb.button_index == MOUSE_BUTTON_MIDDLE:
-			_drag_mode = "pan" if mb.pressed else ""
-	elif event is InputEventMouseMotion:
-		var mm := event as InputEventMouseMotion
-		var delta := mm.position - _last_mouse
-		_last_mouse = mm.position
-		if _drag_mode == "paint":
-			var v := _pick_voxel(mm.position)
-			if v != Vector3i(-1, -1, -1):
-				_apply_tool(v)
-		elif _drag_mode == "orbit":
-			cam_desired_theta -= delta.x * 0.008
-			cam_desired_phi -= delta.y * 0.008
-		elif _drag_mode == "pan":
-			var scale := cam_radius * 0.0016
-			var right := camera.global_transform.basis.x
-			var up := camera.global_transform.basis.y
-			cam_desired_target -= right * delta.x * scale
-			cam_desired_target += up * delta.y * scale
+	if event is InputEventMouseMotion and state == "playing":
+		var vp := get_viewport().get_visible_rect().size
+		var mp := (event as InputEventMouseMotion).position
+		target_x = clampf((mp.x / vp.x * 2.0 - 1.0) * 22.0, -22.0, 22.0)
+		target_y = clampf(1.5 + (1.0 - mp.y / vp.y) * 13.5, 1.2, 15.0)
 	elif event is InputEventKey:
 		var k := event as InputEventKey
-		if not k.pressed or k.echo:
-			return
-		match k.keycode:
-			KEY_SPACE:
-				_toggle_play()
-			KEY_PERIOD:
-				step_simulation()
-				_update_hud()
-			KEY_C:
-				clear_world()
-				_update_hud()
-			KEY_R:
-				seed_soup(0.18)
-				_update_hud()
-			KEY_1:
-				_on_tool_pressed("paint")
-			KEY_2:
-				_on_tool_pressed("erase")
-			KEY_3:
-				_on_tool_pressed("bomb")
-			KEY_4:
-				_on_tool_pressed("stamp")
-			KEY_BRACKETLEFT:
-				brush_size = clampi(brush_size - 1, 1, 6)
-				brush_slider.value = brush_size
-				brush_value.text = "Brush: %d" % brush_size
-			KEY_BRACKETRIGHT:
-				brush_size = clampi(brush_size + 1, 1, 6)
-				brush_slider.value = brush_size
-				brush_value.text = "Brush: %d" % brush_size
-			KEY_Q:
-				cam_desired_theta += 0.25
-			KEY_E:
-				cam_desired_theta -= 0.25
-			KEY_W, KEY_UP:
-				_pan_keys(0, 1)
-			KEY_S, KEY_DOWN:
-				_pan_keys(0, -1)
-			KEY_A, KEY_LEFT:
-				_pan_keys(-1, 0)
-			KEY_D, KEY_RIGHT:
-				_pan_keys(1, 0)
+		if k.pressed:
+			keys_held[k.keycode] = true
+			if k.keycode == KEY_SHIFT:
+				boost_held = true
+			elif k.keycode == KEY_P or k.keycode == KEY_ESCAPE:
+				toggle_pause()
+			elif k.keycode == KEY_ENTER:
+				if state == "menu" or state == "gameover":
+					start_game()
+		else:
+			keys_held.erase(k.keycode)
+			if k.keycode == KEY_SHIFT:
+				boost_held = false
 
-func _pan_keys(fx: int, fy: int) -> void:
-	var scale := cam_radius * 0.06
-	var right := camera.global_transform.basis.x
-	var fwd := -camera.global_transform.basis.z
-	fwd.y = 0
-	fwd = fwd.normalized()
-	cam_desired_target += right * float(fx) * scale + fwd * float(fy) * scale
-
-func _pick_voxel(screen_pos: Vector2) -> Vector3i:
-	var from := camera.project_ray_origin(screen_pos)
-	var to := from + camera.project_ray_normal(screen_pos) * 300.0
-	var query := PhysicsRayQueryParameters3D.create(from, to)
-	query.collision_mask = 1
-	var space := get_world_3d().direct_space_state
-	var hit := space.intersect_ray(query)
-	if hit.is_empty():
-		return Vector3i(-1, -1, -1)
-	var p: Vector3 = hit["position"]
-	var x := int(floor(p.x + GX * 0.5))
-	var y := int(floor(p.y + GY * 0.5))
-	var z := int(floor(p.z + GZ * 0.5))
-	if x < 0 or y < 0 or z < 0 or x >= GX or y >= GY or z >= GZ:
-		return Vector3i(-1, -1, -1)
-	return Vector3i(x, y, z)
-
-func _apply_tool(v: Vector3i) -> void:
-	var now := Time.get_ticks_msec()
-	if tool == "paint" or tool == "erase":
-		var r := float(brush_size) * 0.75
-		var R := int(ceil(r))
-		var val := 1 if tool == "paint" else 0
-		for dy in range(-R, R + 1):
-			for dz in range(-R, R + 1):
-				for dx in range(-R, R + 1):
-					if float(dx * dx + dy * dy + dz * dz) <= r * r:
-						set_cell(v.x + dx, v.y + dy, v.z + dz, val)
-		_recount()
-	elif tool == "bomb":
-		if now - _last_tool_ms < 110:
-			return
-		_last_tool_ms = now
-		var r := 3.4
-		var R := 4
-		for dy in range(-R, R + 1):
-			for dz in range(-R, R + 1):
-				for dx in range(-R, R + 1):
-					if float(dx * dx + dy * dy + dz * dz) <= r * r:
-						set_cell(v.x + dx, v.y + dy, v.z + dz, 0)
-		_recount()
-	elif tool == "stamp":
-		if now - _last_tool_ms < 200:
-			return
-		_last_tool_ms = now
-		stamp_pattern(stamp_kind, v.x, v.y, v.z)
+func _keyboard_steer(dt: float) -> void:
+	var mx := 0.0
+	var my := 0.0
+	if keys_held.has(KEY_A) or keys_held.has(KEY_LEFT):
+		mx -= 1.0
+	if keys_held.has(KEY_D) or keys_held.has(KEY_RIGHT):
+		mx += 1.0
+	if keys_held.has(KEY_W) or keys_held.has(KEY_UP):
+		my += 1.0
+	if keys_held.has(KEY_S) or keys_held.has(KEY_DOWN):
+		my -= 1.0
+	if mx != 0.0 or my != 0.0:
+		target_x = clampf(target_x + mx * 30.0 * dt, -22.0, 22.0)
+		target_y = clampf(target_y + my * 20.0 * dt, 1.2, 15.0)
 
 # ── Main loop ───────────────────────────────────────────────────
 func _process(delta: float) -> void:
-	if running:
-		sim_acc += delta * speed
-		while sim_acc >= 1.0:
-			step_simulation()
-			sim_acc -= 1.0
+	if state == "paused":
+		return
+	if state == "menu":
+		menu_time += delta
+		speed = 12.0
+		player_z += speed * delta
+		target_x = sin(menu_time * 0.45) * 10.0
+		target_y = 6.0 + sin(menu_time * 0.7) * 2.2
+		_update_chunks(delta)
+	elif state == "playing":
+		_keyboard_steer(delta)
+		target_x = clampf(target_x, -22.0, 22.0)
+		target_y = clampf(target_y, 1.2, 15.0)
+		base_speed = minf(32.0, 14.0 + float(int(distance / 400.0)) * 0.7)
+		speed = base_speed * (1.55 if boost_held else 1.0)
+		player_z += speed * delta
+		distance += speed * delta
+		if invuln > 0.0:
+			invuln -= delta
+		if combo_timer > 0.0:
+			combo_timer -= delta
+			if combo_timer <= 0.0:
+				combo = 0
+		var lvl := int(distance / 400.0)
+		if lvl > last_speed_level:
+			last_speed_level = lvl
+		if distance >= next_shield_at:
+			next_shield_at += 700.0
+			_spawn_orb(true)
+		orb_timer += delta
+		if orb_timer > 0.7:
+			orb_timer = 0.0
+			_spawn_orb(false)
+		_update_chunks(delta)
+		_check_collisions()
 		_update_hud()
-	_render_cells()
+	elif state == "gameover":
+		player_z += 2.0 * delta
+		_update_chunks(delta)
 
-	if auto_orbit:
-		cam_desired_theta += delta * 0.12
-	var k := 1.0 - pow(0.0001, delta)
-	cam_theta += (cam_desired_theta - cam_theta) * k
-	cam_phi += (cam_desired_phi - cam_phi) * k
-	cam_radius += (cam_desired_radius - cam_radius) * k
-	cam_target = cam_target.lerp(cam_desired_target, k)
-	cam_phi = clampf(cam_phi, 0.12, PI - 0.12)
-	cam_radius = clampf(cam_radius, 7.0, 110.0)
-	var sp := sin(cam_phi)
-	camera.position = cam_target + Vector3(
-		cam_radius * sp * sin(cam_theta),
-		cam_radius * cos(cam_phi),
-		cam_radius * sp * cos(cam_theta))
-	camera.look_at(cam_target)
+	# Ship follow + banking
+	var prev_x := ship_x
+	var prev_y := ship_y
+	var k := 1.0 - pow(0.0005, delta)
+	ship_x += (target_x - ship_x) * k
+	ship_y += (target_y - ship_y) * k
+	ship.position = Vector3(ship_x, ship_y, player_z)
+	var vx := (ship_x - prev_x) / maxf(delta, 0.001)
+	var vy := (ship_y - prev_y) / maxf(delta, 0.001)
+	ship.rotation.z = clampf(-vx * 0.028, -0.7, 0.7)
+	ship.rotation.x = clampf(vy * 0.02, -0.45, 0.45)
 
-	var t := Time.get_ticks_msec() / 1000.0 * 0.25
-	var cyan := get_node_or_null("CyanLight") as OmniLight3D
-	var mag := get_node_or_null("MagLight") as OmniLight3D
-	if cyan:
-		cyan.position = Vector3(cos(t) * 34.0, 14.0, sin(t) * 34.0)
-	if mag:
-		mag.position = Vector3(cos(t + PI) * 34.0, 10.0, sin(t + PI) * 34.0)
+	# Camera chase
+	var cam_k := 1.0 - pow(0.001, delta)
+	camera.position.x += (ship_x * 0.62 - camera.position.x) * cam_k
+	camera.position.y += (ship_y + 3.4 - camera.position.y) * cam_k
+	camera.position.z += (player_z - 9.5 - camera.position.z) * cam_k
+	camera.look_at(Vector3(ship_x * 0.85, ship_y + 0.4, player_z + 14.0))
+	camera.fov = lerpf(camera.fov, 62.0 + (speed - 14.0) * 0.5 + (9.0 if boost_held and state == "playing" else 0.0), minf(1.0, delta * 4.0))
+
+	# Followers
+	ground.position = Vector3(0, 0, player_z + 90.0)
+	grid_lines.position = Vector3(0, 0, roundf(player_z / SPACING) * SPACING + 60.0)
+	var stars := get_node_or_null("Stars") as MultiMeshInstance3D
+	if stars:
+		stars.position = Vector3(0, 0, player_z)
+
+	_render_pillars(delta)
+	_check_orbs(delta)
+	for ch in chunks:
+		var near_cd: PackedFloat32Array = ch["near_cd"]
+		for i in range(near_cd.size()):
+			if near_cd[i] > 0.0:
+				near_cd[i] -= delta
