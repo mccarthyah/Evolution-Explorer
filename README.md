@@ -68,6 +68,12 @@ Press `J` to open the journal. Explosions scatter gliders and blocks as debris, 
 
 Press `S` for a compact **EVO1 code** (run-length encoded, species included) — web copies it to your clipboard with a share modal; Godot puts it on the clipboard directly. Anyone can press `L` and paste it to take over your exact world.
 
+### 🗺️ Minimap, ⏳ replay & 📅 daily challenge
+
+- **Minimap** (`K`) — live species territories, ghost memory, stasis bubbles, and your position + heading, bottom-right
+- **Replay** (`H`) — rewinds through the last **100 generations**; scrub with `,` / `.` (Shift ×10) or the slider (web). Sim pauses, the world dims, and you can watch explosions unfold backwards and forwards. Great for seeing how a territory war actually happened
+- **Daily challenge** (`D`) — a date-derived seed generates the **same starting world for everyone playing that day**. At generation 300 your run is scored: `alive×3 + biomass + discoveries×25 + explosions×5`. Personal bests persist (browser localStorage / Godot `user://daily.cfg`). Press `R` to return to free mode
+
 ### ✨ Atmosphere
 
 - **Bloom** (`B`) — neon glow post-processing (UnrealBloom on web, WorldEnvironment glow in Godot)
@@ -94,6 +100,9 @@ Press `S` for a compact **EVO1 code** (run-length encoded, species included) —
 | Save / load ecosystem code | `S` / `L` |
 | Bloom toggle | `B` |
 | Day/night cycle | `T` |
+| Minimap | `K` |
+| Replay history | `H`, scrub `,` / `.` (Shift ×10) |
+| Daily challenge | `D` (back to free mode: `R`) |
 | Quit (Godot) / pause (web) | `Esc` |
 
 ## 📁 Project structure

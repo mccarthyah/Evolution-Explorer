@@ -142,6 +142,19 @@ var sun_light: DirectionalLight3D
 var floor_material: StandardMaterial3D
 var world_env: Environment
 
+# ── v5: replay history, daily challenge, minimap ──
+const HISTORY_MAX: int = 100
+var history_frames: Array = []
+var history_mode: bool = false
+var history_view: int = 0
+var was_running_before_history: bool = true
+var minimap: Control
+var minimap_elapsed: float = 0.0
+var minimap_on: bool = true
+var daily_mode: bool = false
+var daily_scored: bool = false
+var rng_state: int = -1
+
 var mesh_instance: MultiMeshInstance3D
 var multimesh: MultiMesh
 var camera: Camera3D
@@ -239,6 +252,7 @@ func build_world() -> void:
 	hint.text = "WASD fly  |  Arrow keys look  |  Space/Ctrl rise/fall  |  Shift boost\nV overview  |  P pause  |  N step  |  R randomize  |  C clear  |  Esc quit\n[ / ] speed  |  - / = height  |  M memory  |  1/2/3 species  |  F/G place/erase cell\nSeed tools (aim at ground): 4 R-pento 5⚡  5 Glider 10⚡  6 Pulsar 25⚡  7 Rain 20⚡\n8 Stasis 15⚡  9 Glider Gun 60⚡  —  harvest gold orbs at blast sites for ⚡\nJ field journal  |  S save code / L load code  |  B bloom  |  T day/night"
 	canvas.add_child(hint)
 	hint.text += "\nInstability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON"
+	hint.text += "\nK minimap  |  H replay (, / . scrub)  |  D daily challenge"
 	toast_label = Label.new()
 	toast_label.position = Vector2(420.0, 92.0)
 	toast_label.add_theme_font_size_override("font_size", 19)
@@ -252,9 +266,21 @@ func build_world() -> void:
 	journal_label.visible = false
 	canvas.add_child(journal_label)
 	refresh_journal()
+	build_minimap(canvas)
 
 func index_of(x: int, z: int) -> int:
 	return z * GRID + x
+
+# Deterministic RNG: free mode uses the seeded RandomNumberGenerator,
+# daily mode uses a date-derived LCG so everyone gets the same world.
+func rnd() -> float:
+	if rng_state < 0:
+		return rng.randf()
+	rng_state = (rng_state * 1664525 + 1013904223) & 0x7FFFFFFF
+	return float(rng_state) / 2147483648.0
+
+func rnd_range(lo: int, hi: int) -> int:
+	return lo + int(rnd() * float(hi - lo + 1))
 
 func seed_world() -> void:
 	for i in range(TOTAL):
@@ -270,14 +296,18 @@ func seed_world() -> void:
 	blasts.clear()
 	explosions_total = 0
 	last_explosion = "NONE"
+	history_frames.clear()
+	if history_mode:
+		history_mode = false
+		running = was_running_before_history
 	for k in range(17):
-		var cx: int = rng.randi_range(6, GRID - 7)
-		var cz: int = rng.randi_range(6, GRID - 7)
-		var radius: int = rng.randi_range(4, 9)
-		var species: int = rng.randi_range(1, 3)
+		var cx: int = rnd_range(6, GRID - 7)
+		var cz: int = rnd_range(6, GRID - 7)
+		var radius: int = rnd_range(4, 9)
+		var species: int = rnd_range(1, 3)
 		for z in range(maxi(0, cz - radius), mini(GRID, cz + radius + 1)):
 			for x in range(maxi(0, cx - radius), mini(GRID, cx + radius + 1)):
-				if Vector2(x - cx, z - cz).length() < float(radius) and rng.randf() < 0.37:
+				if Vector2(x - cx, z - cz).length() < float(radius) and rnd() < 0.37:
 					cells[index_of(x, z)] = species
 	generations = 0
 	refresh_population()
@@ -339,6 +369,11 @@ func step_simulation() -> void:
 	update_stasis()
 	refresh_population()
 	check_contract()
+	history_frames.append({"c": cells.duplicate(), "a": ages.duplicate(), "h": heights.duplicate()})
+	if history_frames.size() > HISTORY_MAX:
+		history_frames.pop_front()
+	if daily_mode and not daily_scored and generations == 300:
+		score_daily()
 
 # Detect short-period oscillators as stationary, bounded connected structures.
 # The signature includes the absolute footprint, so moving gliders are not
@@ -496,8 +531,8 @@ func detonate(center: Vector2i) -> void:
 	# Small clusters and gliders seed new activity rather than dying instantly.
 	var glider: Array[Vector2i] = [Vector2i(1, 0), Vector2i(2, 1), Vector2i(0, 2), Vector2i(1, 2), Vector2i(2, 2)]
 	for seed in range(MAX_DEBRIS_SEEDS):
-		var angle: float = rng.randf_range(0.0, TAU)
-		var distance: float = rng.randf_range(float(EXPLOSION_RADIUS) + 1.0, float(EXPLOSION_RADIUS) * 2.5)
+		var angle: float = rnd() * TAU
+		var distance: float = rnd() * (float(EXPLOSION_RADIUS) * 2.5 - float(EXPLOSION_RADIUS) - 1.0) + float(EXPLOSION_RADIUS) + 1.0
 		var px: int = center.x + roundi(cos(angle) * distance)
 		var pz: int = center.y + roundi(sin(angle) * distance)
 		var kind: int = seed % 3
@@ -512,7 +547,7 @@ func detonate(center: Vector2i) -> void:
 			if x < 0 or x >= GRID or z < 0 or z >= GRID:
 				continue
 			var i: int = index_of(x, z)
-			cells[i] = species if rng.randf() < 0.7 else rng.randi_range(1, 3)
+			cells[i] = species if rnd() < 0.7 else rnd_range(1, 3)
 			ages[i] = 1
 			explosion_cooldowns[i] = EXPLOSION_COOLDOWN
 	var blast_pos := Vector3((float(center.x) - float(GRID - 1) * 0.5) * SPACING, 3.0, (float(center.y) - float(GRID - 1) * 0.5) * SPACING)
@@ -587,7 +622,7 @@ func _process(delta: float) -> void:
 		sun_light.light_energy = 0.95 * world_brightness
 	if floor_material != null:
 		floor_material.albedo_color = BASE_FLOOR * world_brightness
-	if running:
+	if running and not history_mode:
 		accumulated += delta
 		var steps: int = 0
 		while accumulated >= generation_interval and steps < 4:
@@ -596,6 +631,10 @@ func _process(delta: float) -> void:
 			steps += 1
 		if steps == 4:
 			accumulated = 0.0
+	minimap_elapsed += delta
+	if minimap_on and minimap != null and minimap_elapsed >= 0.25:
+		minimap_elapsed = 0.0
+		minimap.queue_redraw()
 	visual_elapsed += delta
 	if visual_elapsed >= VISUAL_INTERVAL:
 		update_visuals(minf(0.1, visual_elapsed))
@@ -617,12 +656,41 @@ func _process(delta: float) -> void:
 		blasts[b]["ttl"] = float(blasts[b]["ttl"]) - delta
 		if float(blasts[b]["ttl"]) <= 0.0:
 			blasts.remove_at(b)
-	var mode: String = "OVERVIEW" if overview else "FLIGHT"
+	var mode: String = "FLIGHT"
+	if history_mode:
+		mode = "REPLAY"
+	elif overview:
+		mode = "OVERVIEW"
+	elif daily_mode:
+		mode = "DAILY CHALLENGE"
 	hud.text = "EVOLUTION  /  LIVING TERRAIN\nGeneration %d     Alive %d     %s\n%s   |   %.1f gen/sec   |   Height %.1fx   |   Memory %s   |   Brush %d" % [generations, population, mode, "RUNNING" if running else "PAUSED", 1.0 / generation_interval, height_scale, "ON" if memory_enabled else "OFF", brush_species]
 	hud.text += "\nExplosions %d  |  Last %s" % [explosions_total, last_explosion]
 	hud.text += "\n⚡ Biomass %d   |   🔬 %d/%d   |   Contract %s" % [biomass, discoveries.size(), JOURNAL_PATTERNS.size(), contract_hud_text()]
+	if history_mode:
+		hud.text += "\n⏳ REPLAY %d/%d  —  , / . scrub (Shift ×10)  —  H to return" % [history_view + 1, history_frames.size()]
 
 func update_visuals(delta: float) -> void:
+	if history_mode:
+		# Replay: render a stored frame, dimmed to distinguish it from live.
+		var frame: Dictionary = history_frames[history_view]
+		var fc: PackedByteArray = frame["c"]
+		var fa: PackedInt32Array = frame["a"]
+		var fh: PackedFloat32Array = frame["h"]
+		for z in range(GRID):
+			for x in range(GRID):
+				var i: int = index_of(x, z)
+				var living: int = int(fc[i])
+				var h: float = maxf(0.025, fh[i])
+				var pos: Vector3 = Vector3((float(x) - float(GRID - 1) * 0.5) * SPACING, h * 0.5, (float(z) - float(GRID - 1) * 0.5) * SPACING)
+				multimesh.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(1.0, h, 1.0)), pos))
+				var tint: Color
+				if living > 0:
+					tint = PALETTE[living - 1].lerp(Color(1.0, 0.52, 0.26), float(fa[i]) / float(MAX_AGE) * 0.55)
+				else:
+					tint = Color(0.06, 0.14, 0.26)
+				tint = Color(tint.r * 0.8, tint.g * 0.8, tint.b * 0.8)
+				multimesh.set_instance_color(i, tint)
+		return
 	for z in range(GRID):
 		for x in range(GRID):
 			var i: int = index_of(x, z)
@@ -680,8 +748,10 @@ func _unhandled_input(event: InputEvent) -> void:
 				running = not running
 			KEY_N:
 				if not running: step_simulation()
-			KEY_R:
-				seed_world()
+		KEY_R:
+			daily_mode = false
+			rng_state = -1
+			seed_world()
 			KEY_C:
 				for i in range(TOTAL):
 					cells[i] = 0
@@ -692,6 +762,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				pattern_snapshots.clear()
 				oscillator_tracks.clear()
 				explosion_queue.clear()
+				history_frames.clear()
 				for i in range(TOTAL):
 					explosion_cooldowns[i] = 0
 			KEY_M:
@@ -732,10 +803,24 @@ func _unhandled_input(event: InputEvent) -> void:
 					show_banner("Ecosystem loaded from clipboard ✓", Color(0.65, 1.0, 0.85))
 				else:
 					show_banner("No valid EVO1 code in clipboard", Color(1.0, 0.55, 0.6))
+			KEY_H:
+				toggle_history()
+			KEY_COMMA:
+				scrub_history(-10 if event.shift_pressed else -1)
+			KEY_PERIOD:
+				scrub_history(10 if event.shift_pressed else 1)
+			KEY_K:
+				minimap_on = not minimap_on
+				if minimap != null:
+					minimap.visible = minimap_on
+			KEY_D:
+				start_daily()
 			KEY_F, KEY_G:
 				paint_at_cursor(get_viewport().get_visible_rect().size * 0.5, event.keycode == KEY_F)
 
 func paint_at_cursor(screen_pos: Vector2, alive: bool) -> void:
+	if history_mode:
+		return
 	var ray_origin: Vector3 = camera.project_ray_origin(screen_pos)
 	var ray_direction: Vector3 = camera.project_ray_normal(screen_pos)
 	var hit: Variant = Plane(Vector3.UP, 0.0).intersects_ray(ray_origin, ray_direction)
@@ -783,6 +868,9 @@ func place_pattern(rows: Array, origin: Vector2i, species: int) -> int:
 	return placed
 
 func use_tool(keycode: int) -> void:
+	if history_mode:
+		show_banner("Exit replay (H) before using tools", Color(1.0, 0.55, 0.6))
+		return
 	var tool: Dictionary = TOOLS[keycode]
 	var cost: int = int(tool["cost"])
 	if biomass < cost:
@@ -801,12 +889,12 @@ func use_tool(keycode: int) -> void:
 			place_pattern(PULSAR_ROWS, Vector2i(target.x - 6, target.y - 6), brush_species)
 		KEY_7:
 			for k in range(40):
-				var angle: float = rng.randf_range(0.0, TAU)
-				var dist: float = rng.randf_range(0.0, 6.0)
+				var angle: float = rnd() * TAU
+				var dist: float = rnd() * 6.0
 				var x: int = clampi(target.x + roundi(cos(angle) * dist), 0, GRID - 1)
 				var z: int = clampi(target.y + roundi(sin(angle) * dist), 0, GRID - 1)
 				var i: int = index_of(x, z)
-				cells[i] = brush_species if rng.randf() < 0.75 else rng.randi_range(1, 3)
+				cells[i] = brush_species if rnd() < 0.75 else rnd_range(1, 3)
 				ages[i] = 1
 			refresh_population()
 		KEY_8:
@@ -1160,3 +1248,86 @@ func contract_hud_text() -> String:
 				parts += 1
 			progress = "%d/3 goals" % parts
 	return "%d/%d  %s  [%s]  reward %d⚡" % [contract_index + 1, CONTRACTS.size(), contract["text"], progress, int(contract["reward"])]
+
+# ── v5: replay history ──
+func toggle_history() -> void:
+	if not history_mode and history_frames.size() < 2:
+		show_banner("Not enough history yet — let it run", Color(1.0, 0.55, 0.6))
+		return
+	history_mode = not history_mode
+	if history_mode:
+		was_running_before_history = running
+		running = false
+		history_view = history_frames.size() - 1
+		show_banner("⏳ REPLAY — , / . to scrub (Shift ×10) — H to return", Color(1.0, 0.85, 0.3))
+	else:
+		running = was_running_before_history
+
+func scrub_history(delta: int) -> void:
+	if not history_mode:
+		return
+	history_view = clampi(history_view + delta, 0, history_frames.size() - 1)
+
+# ── v5: daily challenge ──
+func daily_seed_hash() -> int:
+	var s: String = Time.get_date_string_from_system()
+	var h: int = 5381
+	for k in range(s.length()):
+		h = (h * 33) ^ s.unicode_at(k)
+	return h & 0x7FFFFFFF
+
+func start_daily() -> void:
+	daily_mode = true
+	daily_scored = false
+	rng_state = daily_seed_hash()
+	seed_world()
+	show_banner("📅 DAILY CHALLENGE %s — score lands at generation 300" % Time.get_date_string_from_system(), Color(1.0, 0.85, 0.3))
+
+func score_daily() -> void:
+	daily_scored = true
+	var score: int = population * 3 + biomass + discoveries.size() * 25 + explosions_total * 5
+	var config: ConfigFile = ConfigFile.new()
+	config.load("user://daily.cfg")
+	var best: int = int(config.get_value("daily", Time.get_date_string_from_system(), 0))
+	if score > best:
+		config.set_value("daily", Time.get_date_string_from_system(), score)
+		config.save("user://daily.cfg")
+	show_banner("🏁 DAILY SCORE: Alive %d · ⚡%d · 🔬%d · 💥%d → %d (best %d)" % [population, biomass, discoveries.size(), explosions_total, score, maxi(best, score)], Color(1.0, 0.85, 0.3))
+
+# ── v5: minimap ──
+func build_minimap(canvas: CanvasLayer) -> void:
+	minimap = Control.new()
+	minimap.position = Vector2(1264.0, 726.0)
+	minimap.size = Vector2(146.0, 146.0)
+	minimap.draw.connect(_draw_minimap)
+	canvas.add_child(minimap)
+
+func _draw_minimap() -> void:
+	if minimap == null or camera == null:
+		return
+	var s: float = 146.0 / float(GRID)
+	minimap.draw_rect(Rect2(Vector2.ZERO, minimap.size), Color(0.016, 0.027, 0.07, 0.88))
+	var src: PackedByteArray = cells
+	if history_mode and history_frames.size() > 0:
+		src = history_frames[history_view]["c"]
+	var cell_size: Vector2 = Vector2(s, s)
+	for z in range(GRID):
+		for x in range(GRID):
+			var i: int = index_of(x, z)
+			var v: int = int(src[i])
+			if v != 0:
+				minimap.draw_rect(Rect2(Vector2(float(x) * s, float(z) * s), cell_size), PALETTE[v - 1])
+			elif history[i] > 0.05:
+				minimap.draw_rect(Rect2(Vector2(float(x) * s, float(z) * s), cell_size), Color(0.1, 0.16, 0.28, history[i] * 0.55))
+	for bubble in stasis_bubbles:
+		var c: Vector2 = Vector2((float(bubble["x"]) + 0.5) * s, (float(bubble["z"]) + 0.5) * s)
+		minimap.draw_arc(c, float(STASIS_RADIUS) * s, 0.0, TAU, 24, Color(0.3, 0.9, 1.0, 0.7), 1.5)
+	var px: float = camera.global_position.x / SPACING + float(GRID - 1) * 0.5 + 0.5
+	var pz: float = camera.global_position.z / SPACING + float(GRID - 1) * 0.5 + 0.5
+	var p: Vector2 = Vector2(px * s, pz * s)
+	var fwd: Vector3 = -camera.global_basis.z
+	var dir: Vector2 = Vector2(fwd.x, fwd.z)
+	if dir.length() > 0.001:
+		dir = dir.normalized()
+	minimap.draw_line(p, p + dir * 9.0, Color(1.0, 1.0, 1.0), 1.5)
+	minimap.draw_circle(p, 3.0, Color(1.0, 1.0, 1.0))

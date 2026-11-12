@@ -31,6 +31,7 @@
       <div class="howto-row"><span>🧰</span><p><b>7</b> Seed Rain 20⚡ • <b>8</b> Stasis Field 15⚡ • <b>9</b> Glider Gun 60⚡ — aim at the ground</p></div>
       <div class="howto-row"><span>👁️</span><p><b>V</b> overview &nbsp;•&nbsp; <b>P</b> pause &nbsp;•&nbsp; <b>N</b> step &nbsp;•&nbsp; <b>R</b> random &nbsp;•&nbsp; <b>[ / ]</b> speed &nbsp;•&nbsp; <b>M</b> memory</p></div>
       <div class="howto-row"><span>🔬</span><p><b>J</b> field journal — discover 12 named lifeforms &nbsp;•&nbsp; <b>S / L</b> save &amp; share ecosystem codes &nbsp;•&nbsp; <b>B</b> bloom &nbsp;•&nbsp; <b>T</b> day/night</p></div>
+      <div class="howto-row"><span>🗺️</span><p><b>K</b> minimap &nbsp;•&nbsp; <b>H</b> replay history (<b>, / .</b> scrub, Shift ×10) &nbsp;•&nbsp; <b>D</b> daily challenge — same world for everyone, score at gen 300</p></div>
     </div>
     <button id="play-btn" class="play-btn">▶ &nbsp;START FLYING</button>
   </div>
@@ -45,9 +46,15 @@ V overview | P pause | N step | R randomize | C clear | Esc pause
 Seed tools (aim at ground): 4 R-pento 5⚡ | 5 Glider 10⚡ | 6 Pulsar 25⚡ | 7 Rain 20⚡
 8 Stasis 15⚡ | 9 Glider Gun 60⚡ — harvest gold orbs at blast sites for ⚡
 J field journal | S save code / L load code | B bloom | T day/night
+K minimap | H replay (, / . scrub) | D daily challenge
 Instability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON</div>
   <div id="toasts"></div>
   <div id="journal" class="journal hidden"></div>
+  <canvas id="minimap" width="146" height="146"></canvas>
+  <div id="replay-bar" class="hidden">
+    <span id="replay-label">gen 0 / 0</span>
+    <input type="range" id="replay-slider" min="0" max="99" value="0" step="1">
+  </div>
   <button id="sound-btn" class="icon-btn" title="Sound on/off">🔊</button>
 </div>
 

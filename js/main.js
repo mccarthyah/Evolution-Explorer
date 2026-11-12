@@ -141,6 +141,14 @@ const BASE_FLOOR = new THREE.Color(0.025, 0.045, 0.085);
 let bloomEnabled = true;
 let starsMat = null;
 
+/* v5: replay history, daily challenge, minimap */
+const HISTORY_MAX = 100;
+let historyFrames = [], historyMode = false, historyView = 0, wasRunningBeforeHistory = true;
+let rngState = null; // null = free random; int = deterministic (daily)
+let dailyMode = false, dailyScored = false;
+let minimapOn = true, minimapTimer = 0;
+const MM_COLORS = ['#26e3ff', '#ff3db8', '#8aff61'];
+
 /* ─────────────────────────── AUDIO (light) ──────────────────── */
 const AudioSys = {
   ctx: null, master: null, muted: false, lastPop: 0,
@@ -362,6 +370,12 @@ function updateStasis() {
 
 /* ─────────────────────────── SIMULATION ─────────────────────── */
 const idxOf = (x, z) => z * GRID + x;
+function rnd() {
+  if (rngState === null) return Math.random();
+  rngState = (Math.imul(rngState, 1664525) + 1013904223) >>> 0;
+  return rngState / 4294967296;
+}
+function rndRange(lo, hi) { return lo + Math.floor(rnd() * (hi - lo + 1)); }
 function refreshPopulation() {
   let p = 0; for (let i = 0; i < TOTAL; i++) if (cells[i]) p++;
   population = p;
@@ -372,14 +386,16 @@ function seedWorld() {
   cooldowns.fill(0); warnings.fill(0);
   snapshots = []; tracks = new Map(); queue = []; blasts = [];
   explosionsTotal = 0; lastExplosion = 'NONE';
+  historyFrames = [];
+  if (historyMode) { historyMode = false; running = wasRunningBeforeHistory; $('replay-bar').classList.add('hidden'); }
   for (let k = 0; k < 17; k++) {
-    const cx = 6 + Math.floor(Math.random() * (GRID - 12));
-    const cz = 6 + Math.floor(Math.random() * (GRID - 12));
-    const radius = 4 + Math.floor(Math.random() * 6);
-    const species = 1 + Math.floor(Math.random() * 3);
+    const cx = rndRange(6, GRID - 7);
+    const cz = rndRange(6, GRID - 7);
+    const radius = rndRange(4, 9);
+    const species = rndRange(1, 3);
     for (let z = Math.max(0, cz - radius); z <= Math.min(GRID - 1, cz + radius); z++)
       for (let x = Math.max(0, cx - radius); x <= Math.min(GRID - 1, cx + radius); x++) {
-        if (Math.hypot(x - cx, z - cz) < radius && Math.random() < 0.37) cells[idxOf(x, z)] = species;
+        if (Math.hypot(x - cx, z - cz) < radius && rnd() < 0.37) cells[idxOf(x, z)] = species;
       }
   }
   generations = 0;
@@ -421,6 +437,10 @@ function stepSimulation() {
   updateStasis();
   refreshPopulation();
   checkContract();
+  /* Replay history ring buffer */
+  historyFrames.push({ c: new Uint8Array(cells), a: new Uint16Array(ages), h: new Float32Array(heights) });
+  if (historyFrames.length > HISTORY_MAX) historyFrames.shift();
+  if (dailyMode && !dailyScored && generations === 300) scoreDaily();
 }
 
 /* ── Cellular Instability (mirrors main.gd) ── */
@@ -541,8 +561,8 @@ function detonate(cx, cz) {
     }
   const glider = [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]];
   for (let s = 0; s < MAX_DEBRIS_SEEDS; s++) {
-    const angle = Math.random() * Math.PI * 2;
-    const dist = (EXPLOSION_RADIUS + 1) + Math.random() * (EXPLOSION_RADIUS * 1.5);
+    const angle = rnd() * Math.PI * 2;
+    const dist = (EXPLOSION_RADIUS + 1) + rnd() * (EXPLOSION_RADIUS * 1.5);
     const px = cx + Math.round(Math.cos(angle) * dist);
     const pz = cz + Math.round(Math.sin(angle) * dist);
     const kind = s % 3;
@@ -553,7 +573,7 @@ function detonate(cx, cz) {
       const x = px + ox, z = pz + oz;
       if (x < 0 || x >= GRID || z < 0 || z >= GRID) continue;
       const i = idxOf(x, z);
-      cells[i] = Math.random() < 0.7 ? species : 1 + Math.floor(Math.random() * 3);
+      cells[i] = rnd() < 0.7 ? species : rndRange(1, 3);
       ages[i] = 1;
       cooldowns[i] = EXPLOSION_COOLDOWN;
     }
@@ -576,6 +596,25 @@ function detonate(cx, cz) {
 /* ─────────────────────────── VISUALS ────────────────────────── */
 const _m = new THREE.Matrix4(), _q = new THREE.Quaternion(), _s = new THREE.Vector3(), _p = new THREE.Vector3(), _c = new THREE.Color();
 function updateVisuals(dt) {
+  if (historyMode) {
+    /* Replay: render a stored frame (dimmed to distinguish from live) */
+    const f = historyFrames[historyView];
+    for (let z = 0; z < GRID; z++) for (let x = 0; x < GRID; x++) {
+      const i = idxOf(x, z);
+      const living = f.c[i];
+      const h = Math.max(0.025, f.h[i]);
+      _p.set((x - (GRID - 1) / 2) * SPACING, h * 0.5, (z - (GRID - 1) / 2) * SPACING);
+      _s.set(1, h, 1);
+      _m.compose(_p, _q, _s);
+      pillarsMesh.setMatrixAt(i, _m);
+      if (living > 0) _c.copy(PALETTE[living - 1]).lerp(ORANGE, (f.a[i] / MAX_AGE) * 0.55).multiplyScalar(0.8);
+      else _c.setRGB(0.048, 0.112, 0.208);
+      pillarsMesh.setColorAt(i, _c);
+    }
+    pillarsMesh.instanceMatrix.needsUpdate = true;
+    if (pillarsMesh.instanceColor) pillarsMesh.instanceColor.needsUpdate = true;
+    return;
+  }
   const k = Math.min(1, dt * 5.5);
   for (let z = 0; z < GRID; z++) for (let x = 0; x < GRID; x++) {
     const i = idxOf(x, z);
@@ -639,6 +678,7 @@ function aimCell() {
   return { x, z };
 }
 function paintAt(clientX, clientY, alive) {
+  if (historyMode) return;
   const ndc = new THREE.Vector2((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
   const hit = new THREE.Vector3();
@@ -673,6 +713,7 @@ function placePattern(rows, ox, oz, species) {
   return placed;
 }
 function useTool(key) {
+  if (historyMode) { AudioSys.err(); toast('⏳ Exit replay (H) before using tools', 2200, 'err'); return; }
   const tool = TOOLS[key];
   if (biomass < tool.cost) {
     AudioSys.err();
@@ -694,11 +735,11 @@ function useTool(key) {
     makeStasisBubble(target.x, target.z);
   } else if (tool.kind === 'rain') {
     for (let k = 0; k < 40; k++) {
-      const angle = Math.random() * Math.PI * 2, dist = Math.random() * 6;
+      const angle = rnd() * Math.PI * 2, dist = rnd() * 6;
       const x = Math.max(0, Math.min(GRID - 1, target.x + Math.round(Math.cos(angle) * dist)));
       const z = Math.max(0, Math.min(GRID - 1, target.z + Math.round(Math.sin(angle) * dist)));
       const i = idxOf(x, z);
-      cells[i] = Math.random() < 0.75 ? brushSpecies : 1 + Math.floor(Math.random() * 3);
+      cells[i] = rnd() < 0.75 ? brushSpecies : rndRange(1, 3);
       ages[i] = 1;
     }
     refreshPopulation();
@@ -773,12 +814,19 @@ window.addEventListener('keydown', e => {
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
   keys.add(k);
   if (!started) return;
+  if (historyMode) {
+    if (k === ',') scrubHistory(e.shiftKey ? -10 : -1);
+    else if (k === '.') scrubHistory(e.shiftKey ? 10 : 1);
+    else if (k === 'h') toggleHistory();
+    return;
+  }
   if (k === 'escape' || k === 'p') running = !running;
   else if (k === 'n') { if (!running) stepSimulation(); }
-  else if (k === 'r') seedWorld();
+  else if (k === 'r') { dailyMode = false; rngState = null; seedWorld(); }
   else if (k === 'c') {
     cells.fill(0); ages.fill(0); history.fill(0); generations = 0; population = 0;
     snapshots = []; tracks = new Map(); queue = []; cooldowns.fill(0);
+    historyFrames = [];
   }
   else if (k === 'm') memoryEnabled = !memoryEnabled;
   else if (k === 'v') toggleOverview();
@@ -795,6 +843,9 @@ window.addEventListener('keydown', e => {
   else if (k === 'j') { $('journal').classList.toggle('hidden'); refreshJournal(); }
   else if (k === 's') openSaveModal();
   else if (k === 'l') openLoadModal();
+  else if (k === 'h') toggleHistory();
+  else if (k === 'k') { minimapOn = !minimapOn; $('minimap').classList.toggle('hidden', !minimapOn); }
+  else if (k === 'd') startDaily();
 });
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 function toggleOverview() {
@@ -811,9 +862,112 @@ function toast(html, dur = 3000, cls = '') {
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 450); }, dur);
 }
 function updateHUD() {
-  const mode = overview ? 'OVERVIEW' : 'FLIGHT';
-  $('stats').textContent =
+  const mode = historyMode ? 'REPLAY' : (overview ? 'OVERVIEW' : (dailyMode ? 'DAILY CHALLENGE' : 'FLIGHT'));
+  let t =
     `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}\nExplosions ${explosionsTotal}  |  Last ${lastExplosion}\n⚡ Biomass ${biomass}   |   🔬 ${discoveries.size}/${JOURNAL.length}   |   Contract ${contractHudText()}`;
+  if (historyMode) t += `\n⏳ REPLAY ${historyView + 1}/${historyFrames.length}  —  , / . scrub (Shift ×10)  —  H to return`;
+  $('stats').textContent = t;
+}
+
+/* ── Replay history ── */
+function toggleHistory() {
+  if (!historyMode && historyFrames.length < 2) { toast('⏳ Not enough history yet — let it run', 1800); return; }
+  historyMode = !historyMode;
+  if (historyMode) {
+    wasRunningBeforeHistory = running;
+    running = false;
+    historyView = historyFrames.length - 1;
+    $('replay-bar').classList.remove('hidden');
+    syncReplayBar();
+    toast('⏳ <b>REPLAY</b> — , / . or the slider · H to return', 3200);
+  } else {
+    running = wasRunningBeforeHistory;
+    $('replay-bar').classList.add('hidden');
+  }
+}
+function scrubHistory(delta) {
+  historyView = Math.max(0, Math.min(historyFrames.length - 1, historyView + delta));
+  syncReplayBar();
+}
+function syncReplayBar() {
+  const rb = $('replay-slider');
+  rb.max = Math.max(0, historyFrames.length - 1);
+  rb.value = historyView;
+  $('replay-label').textContent = `gen ${generations - (historyFrames.length - 1 - historyView)} / ${generations}`;
+}
+$('replay-slider').addEventListener('input', e => { if (historyMode) { historyView = +e.target.value; syncReplayBar(); } });
+
+/* ── Daily challenge ── */
+function dailyDateString() {
+  const d = new Date();
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+}
+function dailySeedHash() {
+  const s = dailyDateString();
+  let h = 5381;
+  for (let i = 0; i < s.length; i++) h = (Math.imul(h, 33) ^ s.charCodeAt(i)) >>> 0;
+  return h >>> 0;
+}
+function startDaily() {
+  dailyMode = true; dailyScored = false;
+  rngState = dailySeedHash();
+  seedWorld();
+  AudioSys.fanfare();
+  toast(`📅 <b>DAILY CHALLENGE ${dailyDateString()}</b><br>Same seed for everyone — score lands at generation 300`, 5200, 'gold');
+}
+function scoreDaily() {
+  dailyScored = true;
+  const score = population * 3 + biomass + discoveries.size * 25 + explosionsTotal * 5;
+  let best = 0;
+  try {
+    const key = 'evolution-daily-' + dailyDateString();
+    best = parseInt(localStorage.getItem(key) || '0', 10) || 0;
+    if (score > best) localStorage.setItem(key, String(score));
+  } catch (e) { }
+  AudioSys.fanfare();
+  toast(`🏁 <b>DAILY SCORE @ gen 300</b><br>Alive ${population} · ⚡${biomass} · 🔬${discoveries.size} · 💥${explosionsTotal}<br><b>Score ${score}</b>${score > best ? ' — new personal best!' : ` (best ${best})`}`, 8000, 'gold');
+}
+
+/* ── Minimap ── */
+const minimapCanvas = $('minimap');
+const minimapCtx = minimapCanvas.getContext('2d');
+const _fwd = new THREE.Vector3();
+function drawMinimap() {
+  const S = minimapCanvas.width / GRID;
+  const ctx = minimapCtx;
+  ctx.clearRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+  ctx.fillStyle = 'rgba(4,7,18,0.85)';
+  ctx.fillRect(0, 0, minimapCanvas.width, minimapCanvas.height);
+  const src = historyMode ? historyFrames[historyView].c : cells;
+  for (let z = 0; z < GRID; z++) for (let x = 0; x < GRID; x++) {
+    const i = idxOf(x, z);
+    const v = src[i];
+    if (v > 0) ctx.fillStyle = MM_COLORS[v - 1];
+    else if (history[i] > 0.05) ctx.fillStyle = `rgba(52,86,140,${(history[i] * 0.55).toFixed(2)})`;
+    else continue;
+    ctx.fillRect(x * S, z * S, S, S);
+  }
+  ctx.strokeStyle = 'rgba(77,227,255,0.85)';
+  ctx.lineWidth = 1.5;
+  for (const b of stasisBubbles) {
+    ctx.beginPath();
+    ctx.arc((b.x + 0.5) * S, (b.z + 0.5) * S, STASIS_RADIUS * S, 0, Math.PI * 2);
+    ctx.stroke();
+  }
+  const px = (camera.position.x / SPACING + (GRID - 1) / 2 + 0.5) * S;
+  const pz = (camera.position.z / SPACING + (GRID - 1) / 2 + 0.5) * S;
+  _fwd.set(0, 0, -1).applyQuaternion(camera.quaternion);
+  const fl = Math.hypot(_fwd.x, _fwd.z) || 1;
+  ctx.strokeStyle = '#ffffff';
+  ctx.lineWidth = 2;
+  ctx.beginPath();
+  ctx.moveTo(px, pz);
+  ctx.lineTo(px + (_fwd.x / fl) * 10, pz + (_fwd.z / fl) * 10);
+  ctx.stroke();
+  ctx.fillStyle = '#ffffff';
+  ctx.beginPath();
+  ctx.arc(px, pz, 3, 0, Math.PI * 2);
+  ctx.fill();
 }
 function refreshJournal() {
   const el = $('journal');
@@ -958,7 +1112,7 @@ function loop() {
   requestAnimationFrame(loop);
   const nowMs = performance.now();
   const dt = Math.min(0.05, (nowMs - lastT) / 1000); lastT = nowMs;
-  if (running) {
+  if (running && !historyMode) {
     accumulated += dt;
     let steps = 0;
     while (accumulated >= generationInterval && steps < 4) {
@@ -989,6 +1143,8 @@ function loop() {
     blasts[b].ttl -= dt;
     if (blasts[b].ttl <= 0) blasts.splice(b, 1);
   }
+  minimapTimer += dt;
+  if (minimapTimer > 0.25) { minimapTimer = 0; if (started && minimapOn) drawMinimap(); }
   hudTimer += dt; if (hudTimer > 0.12) { hudTimer = 0; if (started) updateHUD(); }
   if (bloomEnabled) composer.render(); else renderer.render(scene, camera);
 }
