@@ -46,6 +46,71 @@ var explosions_total: int = 0
 var last_explosion: String = "NONE"
 var brush_species: int = 1
 
+# ── Gardener economy ──
+const ORB_VALUE: int = 5
+const ORB_TTL: float = 20.0
+const STASIS_RADIUS: int = 5
+const STASIS_GENS: int = 30
+const STARTING_BIOMASS: int = 20
+const TOOLS: Dictionary = {
+	KEY_4: {"name": "R-pentomino", "cost": 5},
+	KEY_5: {"name": "Glider", "cost": 10},
+	KEY_6: {"name": "Pulsar", "cost": 25},
+	KEY_7: {"name": "Seed Rain", "cost": 20},
+	KEY_8: {"name": "Stasis Field", "cost": 15},
+	KEY_9: {"name": "Glider Gun", "cost": 60},
+}
+const R_PENTOMINO_ROWS: Array = [".XX", "XX.", ".X."]
+const GLIDER_ROWS: Array = [".O.", "..O", "OOO"]
+const PULSAR_ROWS: Array = [
+	"..OOO...OOO..",
+	".............",
+	"O....O.O....O",
+	"O....O.O....O",
+	"O....O.O....O",
+	"..OOO...OOO..",
+	".............",
+	"..OOO...OOO..",
+	"O....O.O....O",
+	"O....O.O....O",
+	"O....O.O....O",
+	".............",
+	"..OOO...OOO..",
+]
+const GUN_ROWS: Array = [
+	"........................O...........",
+	"......................O.O...........",
+	"............OO......OO............OO",
+	"...........O...O....OO............OO",
+	"OO........O.....O...OO..............",
+	"OO........O...O.OO....O.O...........",
+	"..........O.....O.......O...........",
+	"...........O...O....................",
+	"............OO......................",
+]
+const CONTRACTS: Array = [
+	{"id": "collect", "text": "Harvest 15 biomass from blast sites", "target": 15, "reward": 10},
+	{"id": "paint", "text": "Seed 25 cells with the brush (F)", "target": 25, "reward": 15},
+	{"id": "explode", "text": "Witness 3 detonations", "target": 3, "reward": 20},
+	{"id": "balance", "text": "Grow 40+ living cells of all 3 species", "target": 3, "reward": 25},
+	{"id": "tools", "text": "Use 3 different seed tools", "target": 3, "reward": 25},
+	{"id": "pop", "text": "Grow the population to 400", "target": 400, "reward": 30},
+	{"id": "gen300", "text": "Sustain the world to generation 300", "target": 300, "reward": 40},
+	{"id": "master", "text": "MASTER GARDENER: gen 600, 300 alive, 100 biomass", "target": 3, "reward": 100},
+]
+var biomass: int = 0
+var biomass_collected_total: int = 0
+var painted_cells: int = 0
+var max_population: int = 0
+var tools_used: Dictionary = {}
+var orbs: Array[Dictionary] = []
+var stasis_bubbles: Array[Dictionary] = []
+var contract_index: int = 0
+var toast_label: Label
+var toast_ttl: float = 0.0
+var shake: float = 0.0
+var shake_offset: Vector3 = Vector3.ZERO
+
 var mesh_instance: MultiMeshInstance3D
 var multimesh: MultiMesh
 var camera: Camera3D
@@ -65,6 +130,7 @@ func _ready() -> void:
 	warning_timers.resize(TOTAL)
 	build_world()
 	seed_world()
+	biomass = STARTING_BIOMASS
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func build_world() -> void:
@@ -130,9 +196,15 @@ func build_world() -> void:
 	hint.position = Vector2(20.0, 125.0)
 	hint.add_theme_font_size_override("font_size", 14)
 	hint.add_theme_color_override("font_color", Color(0.77, 0.83, 0.96))
-	hint.text = "WASD fly  |  Arrow keys look  |  Space/Ctrl rise/fall  |  Shift boost\nV overview  |  P pause  |  N step  |  R randomize  |  C clear  |  Esc quit\n[ / ] speed  |  - / = height  |  M memory  |  1/2/3 species\nF place cell / G erase cell at screen centre (aim at ground)"
+	hint.text = "WASD fly  |  Arrow keys look  |  Space/Ctrl rise/fall  |  Shift boost\nV overview  |  P pause  |  N step  |  R randomize  |  C clear  |  Esc quit\n[ / ] speed  |  - / = height  |  M memory  |  1/2/3 species  |  F/G place/erase cell\nSeed tools (aim at ground): 4 R-pento 5⚡  5 Glider 10⚡  6 Pulsar 25⚡  7 Rain 20⚡\n8 Stasis 15⚡  9 Glider Gun 60⚡  —  harvest gold orbs at blast sites for ⚡"
 	canvas.add_child(hint)
 	hint.text += "\nInstability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON"
+	toast_label = Label.new()
+	toast_label.position = Vector2(420.0, 92.0)
+	toast_label.add_theme_font_size_override("font_size", 19)
+	toast_label.add_theme_color_override("font_color", Color(0.65, 1.0, 0.85))
+	toast_label.visible = false
+	canvas.add_child(toast_label)
 
 func index_of(x: int, z: int) -> int:
 	return z * GRID + x
@@ -168,6 +240,7 @@ func refresh_population() -> void:
 	for cell in cells:
 		if cell != 0:
 			population += 1
+	max_population = maxi(max_population, population)
 
 func step_simulation() -> void:
 	for z in range(GRID):
@@ -202,15 +275,23 @@ func step_simulation() -> void:
 		var old: int = int(cells[i])
 		var current: int = int(next_cells[i])
 		cells[i] = current
+		var frozen: bool = in_stasis(i % GRID, i / GRID)
 		if current != 0:
-			ages[i] = mini(MAX_AGE, ages[i] + 1) if old != 0 else 1
-			history[i] = minf(HISTORY_LIMIT, history[i] + 0.065)
+			if old != 0:
+				ages[i] = ages[i] if frozen else mini(MAX_AGE, ages[i] + 1)
+			else:
+				ages[i] = 1
+			if not frozen:
+				history[i] = minf(HISTORY_LIMIT, history[i] + 0.065)
 		else:
 			ages[i] = 0
-			history[i] = maxf(0.0, history[i] - 0.012)
+			if not frozen:
+				history[i] = maxf(0.0, history[i] - 0.012)
 	generations += 1
 	update_instability()
+	update_stasis()
 	refresh_population()
+	check_contract()
 
 # Detect short-period oscillators as stationary, bounded connected structures.
 # The signature includes the absolute footprint, so moving gliders are not
@@ -219,7 +300,7 @@ func update_instability() -> void:
 	for i in range(TOTAL):
 		if explosion_cooldowns[i] > 0:
 			explosion_cooldowns[i] -= 1
-		if cells[i] != 0 and ages[i] >= TOWER_LIFESPAN and explosion_cooldowns[i] == 0:
+		if cells[i] != 0 and ages[i] >= TOWER_LIFESPAN and explosion_cooldowns[i] == 0 and not in_stasis(i % GRID, i / GRID):
 			explosion_queue.append(Vector2i(i % GRID, i / GRID))
 			# Prevent the same cell being queued repeatedly while waiting.
 			explosion_cooldowns[i] = EXPLOSION_COOLDOWN
@@ -325,7 +406,7 @@ func find_oscillators() -> void:
 			var cx: int = (min_x + max_x) / 2
 			var cz: int = (min_z + max_z) / 2
 			var center_idx: int = index_of(cx, cz)
-			if explosion_cooldowns[center_idx] == 0:
+			if explosion_cooldowns[center_idx] == 0 and not in_stasis(cx, cz):
 				explosion_queue.append(Vector2i(cx, cz))
 				explosion_cooldowns[center_idx] = EXPLOSION_COOLDOWN
 			updated.erase(key)
@@ -346,7 +427,7 @@ func detonate(center: Vector2i) -> void:
 			if cells[i] != 0:
 				destroyed += 1
 				# Chain reactions: near-expired towers may detonate next generation.
-				if ages[i] >= TOWER_LIFESPAN - 6 and i != source and explosion_cooldowns[i] == 0:
+				if ages[i] >= TOWER_LIFESPAN - 6 and i != source and explosion_cooldowns[i] == 0 and not in_stasis(x, z):
 					explosion_queue.append(Vector2i(x, z))
 			cells[i] = 0
 			ages[i] = 0
@@ -380,6 +461,8 @@ func detonate(center: Vector2i) -> void:
 	var blast_node := _make_blast_node(blast_pos)
 	blasts.append({"x": center.x, "z": center.y, "ttl": 0.65, "node": blast_node})
 	_spawn_burst(blast_pos, Color(1.0, 0.55, 0.15), 26)
+	spawn_orbs(center.x, center.y, 3)
+	shake = clampf(16.0 / (1.0 + blast_pos.distance_to(camera.global_position) * 0.14), 0.15, 1.1)
 	explosions_total += 1
 	last_explosion = "(%d,%d) cleared %d" % [center.x, center.y, destroyed]
 	pattern_snapshots.clear()
@@ -446,6 +529,18 @@ func _process(delta: float) -> void:
 		update_visuals(minf(0.1, visual_elapsed))
 		visual_elapsed = 0.0
 	update_flight(delta)
+	camera.global_position -= shake_offset
+	shake = maxf(0.0, shake - delta * 1.6)
+	if shake > 0.001:
+		shake_offset = Vector3(rng.randf_range(-1.0, 1.0), rng.randf_range(-1.0, 1.0), rng.randf_range(-1.0, 1.0)) * shake * 0.4
+	else:
+		shake_offset = Vector3.ZERO
+	camera.global_position += shake_offset
+	update_orbs(delta)
+	if toast_ttl > 0.0:
+		toast_ttl -= delta
+		if toast_ttl <= 0.0:
+			toast_label.visible = false
 	for b in range(blasts.size() - 1, -1, -1):
 		blasts[b]["ttl"] = float(blasts[b]["ttl"]) - delta
 		if float(blasts[b]["ttl"]) <= 0.0:
@@ -453,6 +548,7 @@ func _process(delta: float) -> void:
 	var mode: String = "OVERVIEW" if overview else "FLIGHT"
 	hud.text = "EVOLUTION  /  LIVING TERRAIN\nGeneration %d     Alive %d     %s\n%s   |   %.1f gen/sec   |   Height %.1fx   |   Memory %s   |   Brush %d" % [generations, population, mode, "RUNNING" if running else "PAUSED", 1.0 / generation_interval, height_scale, "ON" if memory_enabled else "OFF", brush_species]
 	hud.text += "\nExplosions %d  |  Last %s" % [explosions_total, last_explosion]
+	hud.text += "\n⚡ Biomass %d   |   Contract %s" % [biomass, contract_hud_text()]
 
 func update_visuals(delta: float) -> void:
 	for z in range(GRID):
@@ -545,6 +641,8 @@ func _unhandled_input(event: InputEvent) -> void:
 				height_scale = minf(4.0, height_scale + 0.2)
 			KEY_1, KEY_2, KEY_3:
 				brush_species = event.keycode - KEY_1 + 1
+			KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
+				use_tool(event.keycode)
 			KEY_F, KEY_G:
 				paint_at_cursor(get_viewport().get_visible_rect().size * 0.5, event.keycode == KEY_F)
 
@@ -562,4 +660,251 @@ func paint_at_cursor(screen_pos: Vector2, alive: bool) -> void:
 	var i: int = index_of(x, z)
 	cells[i] = brush_species if alive else 0
 	ages[i] = 1 if alive else 0
+	if alive:
+		painted_cells += 1
 	refresh_population()
+
+func aim_cell() -> Vector2i:
+	var screen: Vector2 = get_viewport().get_visible_rect().size * 0.5
+	var ray_origin: Vector3 = camera.project_ray_origin(screen)
+	var ray_direction: Vector3 = camera.project_ray_normal(screen)
+	var hit: Variant = Plane(Vector3.UP, 0.0).intersects_ray(ray_origin, ray_direction)
+	if hit == null:
+		return Vector2i(-1, -1)
+	var point: Vector3 = hit as Vector3
+	var x: int = roundi(point.x / SPACING + float(GRID - 1) * 0.5)
+	var z: int = roundi(point.z / SPACING + float(GRID - 1) * 0.5)
+	if x < 0 or x >= GRID or z < 0 or z >= GRID:
+		return Vector2i(-1, -1)
+	return Vector2i(x, z)
+
+func place_pattern(rows: Array, origin: Vector2i, species: int) -> int:
+	var placed: int = 0
+	for r in range(rows.size()):
+		var row: String = rows[r]
+		for c in range(row.length()):
+			if row[c] == "O":
+				var x: int = origin.x + c
+				var z: int = origin.y + r
+				if x >= 0 and x < GRID and z >= 0 and z < GRID:
+					cells[index_of(x, z)] = species
+					ages[index_of(x, z)] = 1
+					placed += 1
+	refresh_population()
+	return placed
+
+func use_tool(keycode: int) -> void:
+	var tool: Dictionary = TOOLS[keycode]
+	var cost: int = int(tool["cost"])
+	if biomass < cost:
+		show_banner("Not enough biomass for %s — need %d ⚡" % [tool["name"], cost], Color(1.0, 0.55, 0.6))
+		return
+	var target: Vector2i = aim_cell()
+	if target.x < 0:
+		show_banner("Aim at the ground to place " + tool["name"], Color(1.0, 0.55, 0.6))
+		return
+	match keycode:
+		KEY_4:
+			place_pattern(R_PENTOMINO_ROWS, target, brush_species)
+		KEY_5:
+			place_pattern(GLIDER_ROWS, target, brush_species)
+		KEY_6:
+			place_pattern(PULSAR_ROWS, Vector2i(target.x - 6, target.y - 6), brush_species)
+		KEY_7:
+			for k in range(40):
+				var angle: float = rng.randf_range(0.0, TAU)
+				var dist: float = rng.randf_range(0.0, 6.0)
+				var x: int = clampi(target.x + roundi(cos(angle) * dist), 0, GRID - 1)
+				var z: int = clampi(target.y + roundi(sin(angle) * dist), 0, GRID - 1)
+				var i: int = index_of(x, z)
+				cells[i] = brush_species if rng.randf() < 0.75 else rng.randi_range(1, 3)
+				ages[i] = 1
+			refresh_population()
+		KEY_8:
+			if stasis_bubbles.size() >= 4:
+				show_banner("Too many stasis fields active", Color(1.0, 0.55, 0.6))
+				return
+			make_stasis_bubble(target)
+		KEY_9:
+			place_pattern(GUN_ROWS, target, brush_species)
+	biomass -= cost
+	tools_used[keycode] = true
+	show_banner("%s placed  (-%d ⚡)" % [tool["name"], cost], Color(0.65, 1.0, 0.85))
+
+func make_stasis_bubble(target: Vector2i) -> void:
+	var pos: Vector3 = Vector3((float(target.x) - float(GRID - 1) * 0.5) * SPACING, 2.5, (float(target.y) - float(GRID - 1) * 0.5) * SPACING)
+	var sphere: SphereMesh = SphereMesh.new()
+	sphere.radius = float(STASIS_RADIUS) * SPACING
+	sphere.height = float(STASIS_RADIUS) * SPACING * 2.0
+	sphere.radial_segments = 28
+	sphere.rings = 14
+	var mat: StandardMaterial3D = StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.transparency = BaseMaterial3D.TRANSPARENCY_ALPHA
+	mat.albedo_color = Color(0.3, 0.9, 1.0, 0.15)
+	sphere.material = mat
+	var node: MeshInstance3D = MeshInstance3D.new()
+	node.mesh = sphere
+	node.position = pos
+	add_child(node)
+	stasis_bubbles.append({"x": target.x, "z": target.y, "gens": STASIS_GENS, "node": node})
+
+func in_stasis(x: int, z: int) -> bool:
+	for bubble in stasis_bubbles:
+		var dx: float = float(x) - float(bubble["x"])
+		var dz: float = float(z) - float(bubble["z"])
+		if dx * dx + dz * dz <= float(STASIS_RADIUS * STASIS_RADIUS):
+			return true
+	return false
+
+func update_stasis() -> void:
+	for b in range(stasis_bubbles.size() - 1, -1, -1):
+		stasis_bubbles[b]["gens"] = int(stasis_bubbles[b]["gens"]) - 1
+		if int(stasis_bubbles[b]["gens"]) <= 0:
+			var node: MeshInstance3D = stasis_bubbles[b].get("node") as MeshInstance3D
+			if node != null and is_instance_valid(node):
+				node.queue_free()
+			stasis_bubbles.remove_at(b)
+
+func spawn_orbs(cx: int, cz: int, count: int) -> void:
+	for k in range(count):
+		var angle: float = rng.randf_range(0.0, TAU)
+		var dist: float = rng.randf_range(1.0, float(EXPLOSION_RADIUS))
+		var wx: float = (float(cx) + cos(angle) * dist - float(GRID - 1) * 0.5) * SPACING
+		var wz: float = (float(cz) + sin(angle) * dist - float(GRID - 1) * 0.5) * SPACING
+		var mesh: SphereMesh = SphereMesh.new()
+		mesh.radius = 0.30
+		mesh.height = 0.60
+		mesh.radial_segments = 16
+		mesh.rings = 8
+		var mat: StandardMaterial3D = StandardMaterial3D.new()
+		mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+		mat.albedo_color = Color(1.0, 0.82, 0.25)
+		mesh.material = mat
+		var node: MeshInstance3D = MeshInstance3D.new()
+		node.mesh = mesh
+		node.position = Vector3(wx, 2.2, wz)
+		add_child(node)
+		orbs.append({"node": node, "ttl": ORB_TTL, "value": ORB_VALUE, "base": Vector3(wx, 2.2, wz), "phase": rng.randf_range(0.0, TAU)})
+
+func update_orbs(delta: float) -> void:
+	for o in range(orbs.size() - 1, -1, -1):
+		var orb: Dictionary = orbs[o]
+		orb["ttl"] = float(orb["ttl"]) - delta
+		var node: MeshInstance3D = orb["node"] as MeshInstance3D
+		var base: Vector3 = orb["base"]
+		var valid_node: bool = node != null and is_instance_valid(node)
+		if valid_node:
+			node.position = base + Vector3(0.0, sin(float(orb["phase"]) + Time.get_ticks_msec() * 0.002) * 0.35, 0.0)
+			var remaining: float = float(orb["ttl"])
+			if remaining < 4.0:
+				var s: float = clampf(0.30 * remaining / 4.0, 0.10, 0.30)
+				node.scale = Vector3(s / 0.30, s / 0.30, s / 0.30)
+		if camera.global_position.distance_to(base) < 2.6:
+			biomass += int(orb["value"])
+			biomass_collected_total += int(orb["value"])
+			show_banner("+%d ⚡ biomass" % int(orb["value"]), Color(1.0, 0.85, 0.3))
+			if valid_node:
+				node.queue_free()
+			orbs.remove_at(o)
+			continue
+		if float(orb["ttl"]) <= 0.0:
+			if valid_node:
+				node.queue_free()
+			orbs.remove_at(o)
+
+func show_banner(text: String, color: Color = Color(0.65, 1.0, 0.85)) -> void:
+	toast_label.text = text
+	toast_label.add_theme_color_override("font_color", color)
+	toast_label.visible = true
+	toast_ttl = 2.2
+
+func check_contract() -> void:
+	if contract_index >= CONTRACTS.size():
+		return
+	var contract: Dictionary = CONTRACTS[contract_index]
+	if not contract_done(contract):
+		return
+	biomass += int(contract["reward"])
+	contract_index += 1
+	show_banner("✔ CONTRACT COMPLETE: %s  (+%d ⚡)" % [contract["text"], int(contract["reward"])], Color(1.0, 0.85, 0.3))
+	print("EVOLUTION: contract complete: ", contract["id"], " at generation ", generations)
+	if contract_index >= CONTRACTS.size():
+		show_banner("🏆 MASTER GARDENER — the terrain is yours. Sandbox continues.", Color(1.0, 0.85, 0.3))
+
+func contract_done(contract: Dictionary) -> bool:
+	var id: String = contract["id"]
+	var target: float = float(contract["target"])
+	match id:
+		"collect":
+			return float(biomass_collected_total) >= target
+		"paint":
+			return float(painted_cells) >= target
+		"explode":
+			return float(explosions_total) >= target
+		"balance":
+			var ok: int = 0
+			for c in species_counts():
+				if c >= 40:
+					ok += 1
+			return float(ok) >= target
+		"tools":
+			return float(tools_used.size()) >= target
+		"pop":
+			return float(max_population) >= target
+		"gen300":
+			return float(generations) >= target
+		"master":
+			var parts: int = 0
+			if generations >= 600:
+				parts += 1
+			if max_population >= 300:
+				parts += 1
+			if biomass_collected_total >= 100:
+				parts += 1
+			return float(parts) >= target
+	return false
+
+func species_counts() -> Array:
+	var counts: Array = [0, 0, 0]
+	for i in range(TOTAL):
+		if cells[i] != 0:
+			counts[int(cells[i]) - 1] += 1
+	return counts
+
+func contract_hud_text() -> String:
+	if contract_index >= CONTRACTS.size():
+		return "ALL COMPLETE 🏆"
+	var contract: Dictionary = CONTRACTS[contract_index]
+	var target: int = int(contract["target"])
+	var id: String = contract["id"]
+	var progress: String = ""
+	match id:
+		"collect":
+			progress = "%d/%d⚡" % [mini(biomass_collected_total, target), target]
+		"paint":
+			progress = "%d/%d" % [mini(painted_cells, target), target]
+		"explode":
+			progress = "%d/%d" % [mini(explosions_total, target), target]
+		"balance":
+			var ok: int = 0
+			for c in species_counts():
+				if c >= 40:
+					ok += 1
+			progress = "%d/3 species" % ok
+		"tools":
+			progress = "%d/%d" % [mini(tools_used.size(), target), target]
+		"pop":
+			progress = "%d/%d" % [mini(max_population, target), target]
+		"gen300":
+			progress = "%d/%d" % [mini(generations, target), target]
+		"master":
+			var parts: int = 0
+			if generations >= 600:
+				parts += 1
+			if max_population >= 300:
+				parts += 1
+			if biomass_collected_total >= 100:
+				parts += 1
+			progress = "%d/3 goals" % parts
+	return "%d/%d  %s  [%s]  reward %d⚡" % [contract_index + 1, CONTRACTS.size(), contract["text"], progress, int(contract["reward"])]

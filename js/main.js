@@ -3,7 +3,9 @@
    Conway B3/S23, 3 species, age-height + terrain memory.
    Cellular Instability: towers explode at age 40 (radius-4 craters,
    chain reactions, debris seeding); oscillators (periods 2-6)
-   detonate after 12 cycles. Free-fly + F/G centre painting.
+   detonate after 12 cycles.
+   Gardener economy: harvest biomass orbs at blast sites, spend on
+   seed tools (4-9), complete contracts. Free-fly + F/G painting.
    ════════════════════════════════════════════════════════════════ */
 import * as THREE from 'three';
 
@@ -21,6 +23,55 @@ const MAX_EXPLOSIONS_PER_GEN = 3, EXPLOSION_COOLDOWN = 12;
 const OSCILLATOR_MAX_CELLS = 64, MAX_DEBRIS_SEEDS = 12;
 const VISUAL_INTERVAL = 1 / 20;
 
+/* Gardener economy (mirrors main.gd) */
+const ORB_VALUE = 5, ORB_TTL = 20.0, STASIS_RADIUS = 5, STASIS_GENS = 30, STARTING_BIOMASS = 20;
+const R_PENTOMINO_ROWS = ['.XX', 'XX.', '.X.'];
+const GLIDER_ROWS = ['.O.', '..O', 'OOO'];
+const PULSAR_ROWS = [
+  '..OOO...OOO..',
+  '.............',
+  'O....O.O....O',
+  'O....O.O....O',
+  'O....O.O....O',
+  '..OOO...OOO..',
+  '.............',
+  '..OOO...OOO..',
+  'O....O.O....O',
+  'O....O.O....O',
+  'O....O.O....O',
+  '.............',
+  '..OOO...OOO..',
+];
+const GUN_ROWS = [
+  '........................O...........',
+  '......................O.O...........',
+  '............OO......OO............OO',
+  '...........O...O....OO............OO',
+  'OO........O.....O...OO..............',
+  'OO........O...O.OO....O.O...........',
+  '..........O.....O.......O...........',
+  '...........O...O....................',
+  '............OO......................',
+];
+const TOOLS = {
+  '4': { name: 'R-pentomino', cost: 5, rows: R_PENTOMINO_ROWS },
+  '5': { name: 'Glider', cost: 10, rows: GLIDER_ROWS },
+  '6': { name: 'Pulsar', cost: 25, rows: PULSAR_ROWS, centered: true },
+  '7': { name: 'Seed Rain', cost: 20, kind: 'rain' },
+  '8': { name: 'Stasis Field', cost: 15, kind: 'stasis' },
+  '9': { name: 'Glider Gun', cost: 60, rows: GUN_ROWS },
+};
+const CONTRACTS = [
+  { id: 'collect', text: 'Harvest 15 biomass from blast sites', target: 15, reward: 10 },
+  { id: 'paint', text: 'Seed 25 cells with the brush (F)', target: 25, reward: 15 },
+  { id: 'explode', text: 'Witness 3 detonations', target: 3, reward: 20 },
+  { id: 'balance', text: 'Grow 40+ living cells of all 3 species', target: 3, reward: 25 },
+  { id: 'tools', text: 'Use 3 different seed tools', target: 3, reward: 25 },
+  { id: 'pop', text: 'Grow the population to 400', target: 400, reward: 30 },
+  { id: 'gen300', text: 'Sustain the world to generation 300', target: 300, reward: 40 },
+  { id: 'master', text: 'MASTER GARDENER: gen 600, 300 alive, 100 biomass', target: 3, reward: 100 },
+];
+
 const $ = id => document.getElementById(id);
 const canvas = $('game-canvas');
 
@@ -33,6 +84,11 @@ let generationInterval = 0.35, heightScale = 1.0, accumulated = 0, visualElapsed
 let overview = false, brushSpecies = 1, started = false;
 let snapshots = [], tracks = new Map(), queue = [], blasts = [];
 let explosionsTotal = 0, lastExplosion = 'NONE', lastToastAt = 0;
+let shake = 0;
+
+/* Gardener economy */
+let biomass = 0, biomassCollectedTotal = 0, paintedCells = 0, maxPopulation = 0;
+let toolsUsed = new Set(), contractIndex = 0, lastOrbToastAt = 0;
 
 /* ─────────────────────────── AUDIO (light) ──────────────────── */
 const AudioSys = {
@@ -45,16 +101,23 @@ const AudioSys = {
       this.master.connect(this.ctx.destination);
     } catch (e) { }
   },
-  pop(big = false) {
+  tone(freq0, freq1, dur, gain, type = 'sine', delay = 0) {
     if (!this.ctx || this.muted) return;
-    const now = performance.now(); if (now - this.lastPop < 90) return; this.lastPop = now;
-    const t = this.ctx.currentTime, dur = big ? 0.5 : 0.22;
+    const t = this.ctx.currentTime + delay;
     const o = this.ctx.createOscillator(), g = this.ctx.createGain();
-    o.type = 'sine'; o.frequency.setValueAtTime(big ? 220 : 380, t);
-    o.frequency.exponentialRampToValueAtTime(60, t + dur);
-    g.gain.setValueAtTime(big ? 0.22 : 0.10, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+    o.type = type; o.frequency.setValueAtTime(freq0, t);
+    if (freq1 !== freq0) o.frequency.exponentialRampToValueAtTime(freq1, t + dur);
+    g.gain.setValueAtTime(gain, t); g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
     o.connect(g); g.connect(this.master); o.start(t); o.stop(t + dur + 0.02);
   },
+  pop(big = false) {
+    const now = performance.now(); if (now - this.lastPop < 90) return; this.lastPop = now;
+    this.tone(big ? 220 : 380, 60, big ? 0.5 : 0.22, big ? 0.22 : 0.10);
+  },
+  blip() { this.tone(880, 1420, 0.09, 0.08); },
+  buy() { this.tone(520, 660, 0.08, 0.09); this.tone(660, 880, 0.09, 0.09, 'sine', 0.07); },
+  fanfare() { this.tone(523, 523, 0.16, 0.12); this.tone(784, 784, 0.28, 0.12, 'sine', 0.14); },
+  err() { this.tone(150, 110, 0.14, 0.10, 'sawtooth'); },
   setMuted(m) { this.muted = m; if (this.master) this.master.gain.value = m ? 0 : 0.4; },
 };
 
@@ -173,9 +236,79 @@ function updateBlasts(dt) {
 }
 const cellWorld = (x, z) => ({ x: (x - (GRID - 1) / 2) * SPACING, z: (z - (GRID - 1) / 2) * SPACING });
 
+/* Biomass orbs (harvestables) */
+const orbPool = [];
+{
+  const geo = new THREE.SphereGeometry(0.30, 16, 8);
+  for (let i = 0; i < 48; i++) {
+    const m = new THREE.Mesh(geo, new THREE.MeshBasicMaterial({ color: 0xffd23f }));
+    m.visible = false; scene.add(m);
+    orbPool.push({ mesh: m, active: false, ttl: 0, value: ORB_VALUE, base: new THREE.Vector3(), phase: 0 });
+  }
+}
+function spawnOrbs(cx, cz, count) {
+  const w = cellWorld(cx, cz);
+  for (let k = 0; k < count; k++) {
+    const o = orbPool.find(o => !o.active); if (!o) return;
+    const angle = Math.random() * Math.PI * 2, dist = 1 + Math.random() * (EXPLOSION_RADIUS - 1);
+    o.base.set(w.x + Math.cos(angle) * dist * SPACING, 2.2, w.z + Math.sin(angle) * dist * SPACING);
+    o.active = true; o.ttl = ORB_TTL; o.phase = Math.random() * Math.PI * 2;
+    o.mesh.visible = true; o.mesh.position.copy(o.base); o.mesh.scale.set(1, 1, 1);
+  }
+}
+function updateOrbs(dt, time) {
+  for (const o of orbPool) {
+    if (!o.active) continue;
+    o.ttl -= dt;
+    o.mesh.position.set(o.base.x, o.base.y + Math.sin(o.phase + time * 0.002) * 0.35, o.base.z);
+    if (o.ttl < 4) {
+      const s = Math.min(1, Math.max(0.33, o.ttl / 4));
+      o.mesh.scale.set(s, s, s);
+    }
+    if (camera.position.distanceTo(o.base) < 2.6) {
+      biomass += o.value; biomassCollectedTotal += o.value;
+      AudioSys.blip();
+      const now = performance.now();
+      if (now - lastOrbToastAt > 1200) { lastOrbToastAt = now; toast(`⚡ <b>+${o.value} biomass</b>`, 1500, 'gold'); }
+      o.active = false; o.mesh.visible = false;
+      continue;
+    }
+    if (o.ttl <= 0) { o.active = false; o.mesh.visible = false; }
+  }
+}
+
+/* Stasis bubbles (freeze aging) */
+const stasisBubbles = [];
+const stasisGeo = new THREE.SphereGeometry(STASIS_RADIUS * SPACING, 28, 14);
+function makeStasisBubble(x, z) {
+  const w = cellWorld(x, z);
+  const m = new THREE.Mesh(stasisGeo, new THREE.MeshBasicMaterial({ color: 0x4de3ff, transparent: true, opacity: 0.14, depthWrite: false }));
+  m.position.set(w.x, 2.5, w.z);
+  scene.add(m);
+  stasisBubbles.push({ x, z, gens: STASIS_GENS, mesh: m });
+}
+function inStasis(x, z) {
+  for (const b of stasisBubbles) {
+    const dx = x - b.x, dz = z - b.z;
+    if (dx * dx + dz * dz <= STASIS_RADIUS * STASIS_RADIUS) return true;
+  }
+  return false;
+}
+function updateStasis() {
+  for (let i = stasisBubbles.length - 1; i >= 0; i--) {
+    const b = stasisBubbles[i];
+    b.gens--;
+    if (b.gens <= 0) { scene.remove(b.mesh); b.mesh.material.dispose(); stasisBubbles.splice(i, 1); }
+  }
+}
+
 /* ─────────────────────────── SIMULATION ─────────────────────── */
 const idxOf = (x, z) => z * GRID + x;
-function refreshPopulation() { let p = 0; for (let i = 0; i < TOTAL; i++) if (cells[i]) p++; population = p; }
+function refreshPopulation() {
+  let p = 0; for (let i = 0; i < TOTAL; i++) if (cells[i]) p++;
+  population = p;
+  if (p > maxPopulation) maxPopulation = p;
+}
 function seedWorld() {
   cells.fill(0); ages.fill(0); history.fill(0); heights.fill(0);
   cooldowns.fill(0); warnings.fill(0);
@@ -216,24 +349,27 @@ function stepSimulation() {
   for (let i = 0; i < TOTAL; i++) {
     const old = cells[i], current = nextCells[i];
     cells[i] = current;
+    const frozen = inStasis(i % GRID, Math.floor(i / GRID));
     if (current !== 0) {
-      ages[i] = old !== 0 ? Math.min(MAX_AGE, ages[i] + 1) : 1;
-      history[i] = Math.min(HISTORY_LIMIT, history[i] + 0.065);
+      ages[i] = old !== 0 ? (frozen ? ages[i] : Math.min(MAX_AGE, ages[i] + 1)) : 1;
+      if (!frozen) history[i] = Math.min(HISTORY_LIMIT, history[i] + 0.065);
     } else {
       ages[i] = 0;
-      history[i] = Math.max(0, history[i] - 0.012);
+      if (!frozen) history[i] = Math.max(0, history[i] - 0.012);
     }
   }
   generations++;
   updateInstability();
+  updateStasis();
   refreshPopulation();
+  checkContract();
 }
 
 /* ── Cellular Instability (mirrors main.gd) ── */
 function updateInstability() {
   for (let i = 0; i < TOTAL; i++) {
     if (cooldowns[i] > 0) cooldowns[i]--;
-    if (cells[i] !== 0 && ages[i] >= TOWER_LIFESPAN && cooldowns[i] === 0) {
+    if (cells[i] !== 0 && ages[i] >= TOWER_LIFESPAN && cooldowns[i] === 0 && !inStasis(i % GRID, Math.floor(i / GRID))) {
       queue.push([i % GRID, Math.floor(i / GRID)]);
       cooldowns[i] = EXPLOSION_COOLDOWN;
     }
@@ -303,7 +439,7 @@ function findOscillators() {
     if (track.ticks >= OSCILLATOR_CYCLES * period) {
       const cx = Math.floor((minX + maxX) / 2), cz = Math.floor((minZ + maxZ) / 2);
       const ci = idxOf(cx, cz);
-      if (cooldowns[ci] === 0) {
+      if (cooldowns[ci] === 0 && !inStasis(cx, cz)) {
         queue.push([cx, cz]);
         cooldowns[ci] = EXPLOSION_COOLDOWN;
       }
@@ -323,7 +459,7 @@ function detonate(cx, cz) {
       const i = idxOf(x, z);
       if (cells[i] !== 0) {
         destroyed++;
-        if (ages[i] >= TOWER_LIFESPAN - 6 && i !== source && cooldowns[i] === 0) queue.push([x, z]);
+        if (ages[i] >= TOWER_LIFESPAN - 6 && i !== source && cooldowns[i] === 0 && !inStasis(x, z)) queue.push([x, z]);
       }
       cells[i] = 0; ages[i] = 0; warnings[i] = 0;
       history[i] = Math.max(history[i], 0.45);
@@ -352,6 +488,9 @@ function detonate(cx, cz) {
   blasts.push({ x: cx, z: cz, ttl: 0.65 });
   spawnBlastRing(w.x, w.z);
   spawnParticles(w.x, 3, w.z, new THREE.Color(1.0, 0.55, 0.15), 26, 7, 0.8);
+  spawnOrbs(cx, cz, 3);
+  const dist = camera.position.distanceTo(new THREE.Vector3(w.x, 3, w.z));
+  shake = Math.min(1.1, Math.max(0.15, 16 / (1 + dist * 0.14)));
   explosionsTotal++;
   lastExplosion = `(${cx},${cz}) cleared ${destroyed}`;
   snapshots = []; tracks = new Map();
@@ -397,7 +536,6 @@ function updateFlight(dt) {
   if (keys.has('arrowup')) pitch -= look * dt;
   if (keys.has('arrowdown')) pitch += look * dt;
   pitch = THREE.MathUtils.clamp(pitch, -1.48, 1.48);
-  camera.rotation.set(pitch, yaw, 0);
   const move = new THREE.Vector3();
   const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
   const right = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
@@ -415,6 +553,16 @@ function updateFlight(dt) {
 }
 const raycaster = new THREE.Raycaster();
 const groundPlane = new THREE.Plane(new THREE.Vector3(0, 1, 0), 0);
+function aimCell() {
+  const ndc = new THREE.Vector2(0, 0);
+  raycaster.setFromCamera(ndc, camera);
+  const hit = new THREE.Vector3();
+  if (!raycaster.ray.intersectPlane(groundPlane, hit)) return null;
+  const x = Math.round(hit.x / SPACING + (GRID - 1) / 2);
+  const z = Math.round(hit.z / SPACING + (GRID - 1) / 2);
+  if (x < 0 || x >= GRID || z < 0 || z >= GRID) return null;
+  return { x, z };
+}
 function paintAt(clientX, clientY, alive) {
   const ndc = new THREE.Vector2((clientX / window.innerWidth) * 2 - 1, -(clientY / window.innerHeight) * 2 + 1);
   raycaster.setFromCamera(ndc, camera);
@@ -426,6 +574,7 @@ function paintAt(clientX, clientY, alive) {
   const i = idxOf(x, z);
   cells[i] = alive ? brushSpecies : 0;
   ages[i] = alive ? 1 : 0;
+  if (alive) paintedCells++;
   refreshPopulation();
 }
 canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -434,6 +583,114 @@ canvas.addEventListener('mousedown', e => {
   if (!started) return;
   paintAt(e.clientX, e.clientY, e.button === 0);
 });
+
+/* ── Tools (mirrors main.gd use_tool) ── */
+function placePattern(rows, ox, oz, species) {
+  let placed = 0;
+  for (let r = 0; r < rows.length; r++) for (let c = 0; c < rows[r].length; c++) {
+    if (rows[r][c] !== 'O') continue;
+    const x = ox + c, z = oz + r;
+    if (x < 0 || x >= GRID || z < 0 || z >= GRID) continue;
+    const i = idxOf(x, z);
+    cells[i] = species; ages[i] = 1; placed++;
+  }
+  refreshPopulation();
+  return placed;
+}
+function useTool(key) {
+  const tool = TOOLS[key];
+  if (biomass < tool.cost) {
+    AudioSys.err();
+    toast(`❌ Not enough biomass for <b>${tool.name}</b> — need ${tool.cost} ⚡`, 2200, 'err');
+    return;
+  }
+  const target = aimCell();
+  if (!target) {
+    AudioSys.err();
+    toast(`❌ Aim at the ground to place <b>${tool.name}</b>`, 2200, 'err');
+    return;
+  }
+  if (tool.kind === 'stasis') {
+    if (stasisBubbles.length >= 4) {
+      AudioSys.err();
+      toast('❌ Too many stasis fields active', 2200, 'err');
+      return;
+    }
+    makeStasisBubble(target.x, target.z);
+  } else if (tool.kind === 'rain') {
+    for (let k = 0; k < 40; k++) {
+      const angle = Math.random() * Math.PI * 2, dist = Math.random() * 6;
+      const x = Math.max(0, Math.min(GRID - 1, target.x + Math.round(Math.cos(angle) * dist)));
+      const z = Math.max(0, Math.min(GRID - 1, target.z + Math.round(Math.sin(angle) * dist)));
+      const i = idxOf(x, z);
+      cells[i] = Math.random() < 0.75 ? brushSpecies : 1 + Math.floor(Math.random() * 3);
+      ages[i] = 1;
+    }
+    refreshPopulation();
+  } else {
+    const ox = tool.centered ? target.x - 6 : target.x;
+    const oz = tool.centered ? target.z - 6 : target.z;
+    placePattern(tool.rows, ox, oz, brushSpecies);
+  }
+  biomass -= tool.cost;
+  toolsUsed.add(key);
+  AudioSys.buy();
+  toast(`🌱 <b>${tool.name}</b> placed (-${tool.cost} ⚡)`, 2000, 'gold');
+}
+
+/* ── Contracts (mirrors main.gd) ── */
+function speciesCounts() {
+  const counts = [0, 0, 0];
+  for (let i = 0; i < TOTAL; i++) if (cells[i]) counts[cells[i] - 1]++;
+  return counts;
+}
+function contractDone(c) {
+  switch (c.id) {
+    case 'collect': return biomassCollectedTotal >= c.target;
+    case 'paint': return paintedCells >= c.target;
+    case 'explode': return explosionsTotal >= c.target;
+    case 'balance': return speciesCounts().filter(n => n >= 40).length >= c.target;
+    case 'tools': return toolsUsed.size >= c.target;
+    case 'pop': return maxPopulation >= c.target;
+    case 'gen300': return generations >= c.target;
+    case 'master':
+      return (generations >= 600 ? 1 : 0) + (maxPopulation >= 300 ? 1 : 0) + (biomassCollectedTotal >= 100 ? 1 : 0) >= c.target;
+  }
+  return false;
+}
+function contractProgress(c) {
+  switch (c.id) {
+    case 'collect': return `${Math.min(biomassCollectedTotal, c.target)}/${c.target}⚡`;
+    case 'paint': return `${Math.min(paintedCells, c.target)}/${c.target}`;
+    case 'explode': return `${Math.min(explosionsTotal, c.target)}/${c.target}`;
+    case 'balance': return `${speciesCounts().filter(n => n >= 40).length}/3 species`;
+    case 'tools': return `${Math.min(toolsUsed.size, c.target)}/${c.target}`;
+    case 'pop': return `${Math.min(maxPopulation, c.target)}/${c.target}`;
+    case 'gen300': return `${Math.min(generations, c.target)}/${c.target}`;
+    case 'master':
+      return `${(generations >= 600 ? 1 : 0) + (maxPopulation >= 300 ? 1 : 0) + (biomassCollectedTotal >= 100 ? 1 : 0)}/3 goals`;
+  }
+  return '';
+}
+function checkContract() {
+  if (contractIndex >= CONTRACTS.length) return;
+  const c = CONTRACTS[contractIndex];
+  if (!contractDone(c)) return;
+  biomass += c.reward;
+  contractIndex++;
+  AudioSys.fanfare();
+  toast(`✔ <b>CONTRACT COMPLETE</b><br>${c.text} (+${c.reward} ⚡)`, 4200, 'gold');
+  if (contractIndex >= CONTRACTS.length) {
+    toast('🏆 <b>MASTER GARDENER</b> — the terrain is yours. Sandbox continues.', 6000, 'gold');
+  }
+}
+function contractHudText() {
+  if (contractIndex >= CONTRACTS.length) return 'ALL COMPLETE 🏆';
+  const c = CONTRACTS[contractIndex];
+  return `${contractIndex + 1}/${CONTRACTS.length} ${c.text} [${contractProgress(c)}] reward ${c.reward}⚡`;
+}
+
+/* ─────────────────────────── INPUT ──────────────────────────── */
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
@@ -455,26 +712,26 @@ window.addEventListener('keydown', e => {
   else if (k === '1' || k === '2' || k === '3') brushSpecies = +k;
   else if (k === 'f') paintAt(window.innerWidth / 2, window.innerHeight / 2, true);
   else if (k === 'g') paintAt(window.innerWidth / 2, window.innerHeight / 2, false);
+  else if (TOOLS[k]) useTool(k);
 });
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 function toggleOverview() {
   overview = !overview;
   if (overview) { camera.position.set(0, 85, 60); yaw = 0; pitch = -0.95; }
   else { camera.position.set(0, 16, 32); yaw = 0; pitch = -0.30; }
-  camera.rotation.set(pitch, yaw, 0);
 }
 
 /* ─────────────────────────── UI ─────────────────────────────── */
-function toast(html, dur = 3000) {
+function toast(html, dur = 3000, cls = '') {
   const t = document.createElement('div');
-  t.className = 'toast'; t.innerHTML = html;
+  t.className = 'toast' + (cls ? ' ' + cls : ''); t.innerHTML = html;
   $('toasts').appendChild(t);
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 450); }, dur);
 }
 function updateHUD() {
   const mode = overview ? 'OVERVIEW' : 'FLIGHT';
   $('stats').textContent =
-    `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}\nExplosions ${explosionsTotal}  |  Last ${lastExplosion}`;
+    `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}\nExplosions ${explosionsTotal}  |  Last ${lastExplosion}\n⚡ Biomass ${biomass}   |   Contract ${contractHudText()}`;
 }
 $('sound-btn').addEventListener('click', () => {
   AudioSys.init();
@@ -486,7 +743,8 @@ $('play-btn').addEventListener('click', () => {
   started = true;
   $('start-screen').classList.add('hidden');
   $('hud').classList.remove('hidden');
-  toast('🧬 Welcome to the Living Terrain. Towers pulse red-hot before they blow.', 4500);
+  toast('🧬 Welcome, Gardener. Harvest gold orbs at blast sites to earn ⚡ biomass.', 4500);
+  toast('Contracts pay bonuses. Tools are on keys 4–9 (aim at the ground).', 4500);
 });
 
 /* ─────────────────────────── MAIN LOOP ──────────────────────── */
@@ -519,8 +777,15 @@ function loop() {
     visualElapsed = 0;
   }
   if (started) updateFlight(dt);
+  camera.rotation.set(pitch, yaw, 0);
+  if (shake > 0.002) {
+    camera.rotation.x += (Math.random() - 0.5) * shake * 0.05;
+    camera.rotation.y += (Math.random() - 0.5) * shake * 0.06;
+    shake = Math.max(0, shake - dt * 1.6);
+  }
   updateParticles(dt);
   updateBlasts(dt);
+  updateOrbs(dt, nowMs);
   for (let b = blasts.length - 1; b >= 0; b--) {
     blasts[b].ttl -= dt;
     if (blasts[b].ttl <= 0) blasts.splice(b, 1);
@@ -531,5 +796,5 @@ function loop() {
 
 /* ─────────────────────────── BOOT ───────────────────────────── */
 seedWorld();
-camera.rotation.set(pitch, yaw, 0);
+biomass = STARTING_BIOMASS;
 loop();
