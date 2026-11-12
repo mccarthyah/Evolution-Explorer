@@ -1085,7 +1085,8 @@ $('sound-btn').addEventListener('click', () => {
   AudioSys.setMuted(!AudioSys.muted);
   $('sound-btn').textContent = AudioSys.muted ? '🔇' : '🔊';
 });
-$('play-btn').addEventListener('click', () => {
+function startGame() {
+  if (started) return;
   AudioSys.init();
   Drone.start();
   started = true;
@@ -1095,7 +1096,79 @@ $('play-btn').addEventListener('click', () => {
   toast('🧬 Welcome, Gardener. Harvest gold orbs at blast sites to earn ⚡ biomass.', 4500);
   toast('Contracts pay bonuses. Tools are on keys 4–9 (aim at the ground).', 4500);
   toast('🔬 J journal · S/L save & share ecosystems · B bloom · T day/night', 5000);
+  if (gamepadIndex !== null) toast('🎮 Controller: sticks fly · RT/LT rise/fall · LB boost · A/B paint', 5000);
+}
+$('play-btn').addEventListener('click', startGame);
+
+/* ─────────────────────────── GAMEPAD (Xbox layout — ROG Ally X etc.) ── */
+let gamepadIndex = null, prevPadButtons = [], padTool = 0;
+const TOOL_KEYS = ['4', '5', '6', '7', '8', '9'];
+function padPressed(gp, i) {
+  return !!(gp.buttons[i] && gp.buttons[i].pressed) && !(prevPadButtons[i] && prevPadButtons[i].pressed);
+}
+window.addEventListener('gamepadconnected', e => {
+  gamepadIndex = e.gamepad.index;
+  prevPadButtons = [];
+  AudioSys.init();
+  toast('🎮 <b>Controller connected</b><br>Sticks fly · RT/LT rise/fall · LB boost · A/B paint · RB cycles tools, R3 places', 5500);
+  if (!started) startGame();
 });
+window.addEventListener('gamepaddisconnected', e => {
+  if (e.gamepad.index === gamepadIndex) { gamepadIndex = null; toast('🎮 Controller disconnected', 2500); }
+});
+function pollGamepad(dt) {
+  if (gamepadIndex === null) return;
+  const gp = navigator.getGamepads()[gamepadIndex];
+  if (!gp) return;
+  if (!started) {
+    if (padPressed(gp, 0) || padPressed(gp, 9)) startGame();
+    prevPadButtons = gp.buttons.map(b => ({ pressed: b.pressed }));
+    return;
+  }
+  /* Analog sticks with deadzone */
+  const DZ = 0.12;
+  let lx = gp.axes[0] || 0, ly = gp.axes[1] || 0;
+  let lm = Math.hypot(lx, ly);
+  if (lm > 1) { lx /= lm; ly /= lm; lm = 1; }
+  const rx = gp.axes[2] || 0, ry = gp.axes[3] || 0;
+  if (Math.hypot(rx, ry) > DZ) {
+    yaw -= rx * 2.6 * dt;
+    pitch = THREE.MathUtils.clamp(pitch - ry * 2.2 * dt, -1.48, 1.48);
+  }
+  /* Left stick = fly, analog triggers = rise / fall */
+  const move = new THREE.Vector3();
+  const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+  const right = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
+  if (lm > DZ) { move.addScaledVector(fwd, -ly); move.addScaledVector(right, lx); }
+  const rt = gp.buttons[7] ? gp.buttons[7].value : 0;
+  const lt = gp.buttons[6] ? gp.buttons[6].value : 0;
+  if (rt > 0.04) move.y += rt;
+  if (lt > 0.04) move.y -= lt;
+  const boost = !!(gp.buttons[4] && gp.buttons[4].pressed);
+  const mag = Math.min(1, move.length());
+  if (mag > 0.001) {
+    camera.position.addScaledVector(move.normalize(), (boost ? 42 : 15) * mag * dt);
+    camera.position.y = Math.max(0.8, camera.position.y);
+  }
+  /* Buttons */
+  if (padPressed(gp, 0)) paintAt(window.innerWidth / 2, window.innerHeight / 2, true);
+  if (padPressed(gp, 1)) paintAt(window.innerWidth / 2, window.innerHeight / 2, false);
+  if (padPressed(gp, 2)) { brushSpecies = brushSpecies % 3 + 1; toast(`🎨 Brush species ${brushSpecies}`, 1400); }
+  if (padPressed(gp, 3)) toggleOverview();
+  if (padPressed(gp, 5)) {
+    padTool = (padTool + 1) % TOOL_KEYS.length;
+    const t = TOOLS[TOOL_KEYS[padTool]];
+    toast(`🧰 <b>${t.name}</b> (${t.cost}⚡) — R3 to place at screen centre`, 2400);
+  }
+  if (padPressed(gp, 11)) useTool(TOOL_KEYS[padTool]);
+  if (padPressed(gp, 9)) { if (historyMode) toggleHistory(); else running = !running; }
+  if (padPressed(gp, 8)) { AudioSys.setMuted(!AudioSys.muted); $('sound-btn').textContent = AudioSys.muted ? '🔇' : '🔊'; }
+  if (padPressed(gp, 12)) toggleHistory();
+  if (padPressed(gp, 13)) startDaily();
+  if (padPressed(gp, 14)) { minimapOn = !minimapOn; $('minimap').classList.toggle('hidden', !minimapOn); }
+  if (padPressed(gp, 15)) { $('journal').classList.toggle('hidden'); refreshJournal(); }
+  prevPadButtons = gp.buttons.map(b => ({ pressed: b.pressed }));
+}
 
 /* ─────────────────────────── MAIN LOOP ──────────────────────── */
 function resize() {
@@ -1128,6 +1201,7 @@ function loop() {
     visualElapsed = 0;
   }
   if (started) updateFlight(dt);
+  pollGamepad(dt);
   camera.rotation.set(pitch, yaw, 0);
   if (shake > 0.002) {
     camera.rotation.x += (Math.random() - 0.5) * shake * 0.05;

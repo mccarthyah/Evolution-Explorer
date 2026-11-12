@@ -81,6 +81,27 @@ Press `S` for a compact **EVO1 code** (run-length encoded, species included) —
 
 ## 🎮 Controls
 
+### 🎮 Controller (web version)
+
+Xbox-layout pads work natively — including the **ROG Ally X** (put it in **Gamepad mode** via Command Center so the browser sees XInput, not mouse emulation):
+
+| Input | Action |
+|---|---|
+| Left stick | Fly (analog speed) |
+| Right stick | Look (analog) |
+| `RT` / `LT` | Rise / fall (analog) |
+| `LB` | Boost |
+| `A` / `B` | Place / erase cell at screen centre |
+| `X` | Cycle brush species |
+| `RB` then `R3` | Cycle seed tool, then place it at screen centre |
+| `Y` | Overview |
+| `Start` | Pause (or exit replay) |
+| `Back` | Mute |
+| D-pad ↑ / ↓ / ← / → | Replay / Daily challenge / Minimap / Journal |
+| `A` or `Start` on title | Start game |
+
+### ⌨️ Keyboard
+
 | Action | Key |
 |---|---|
 | Fly | `WASD` |
@@ -122,7 +143,7 @@ Evolution-Explorer/
 ## 🔧 Tech notes
 
 - **Godot:** GDScript + `MultiMeshInstance3D` (one draw call for 2,304 pillars), unshaded flat-neon material, expanding blast spheres, `CPUParticles3D` bursts, biomass orbs + stasis bubbles as pooled nodes, camera shake, WorldEnvironment glow, clipboard ecosystem codes. No addons, no external assets.
-- **Web:** vanilla JS + Three.js `InstancedMesh`, UnrealBloom post-processing (vendored, offline), arrow-key free-fly, centre/click ground painting, WebAudio pops/blips/fanfares + an ambient drone that tracks ecosystem health, pooled orbs & blast rings, save/load modals. Same simulation, instability, economy, journal, and day/night rules as `main.gd`.
+- **Web:** vanilla JS + Three.js `InstancedMesh`, UnrealBloom post-processing (vendored, offline), arrow-key free-fly **plus native Gamepad API support (analog flight)**, centre/click ground painting, WebAudio pops/blips/fanfares + an ambient drone that tracks ecosystem health, pooled orbs & blast rings, save/load modals. Same simulation, instability, economy, journal, and day/night rules as `main.gd`.
 - Journal matching: connected components are signature-matched against 12 lifeforms in all 4 rotations + mirrors (53 distinct signatures); beacon uses its 8-cell phase because the 6-cell phase splits into two disconnected triominoes.
 - Oscillator detection: board snapshots (last 7) + connected-component footprints; a pattern must repeat exactly at lag 2–6 (and differ at lag 1) for 12 cycles.
 
