@@ -74,6 +74,19 @@ Everything you do earns **XP**: **+25** per discovery, **+30** per contract, **+
 
 Level 7 also unlocks the **Area Brush** — `F` stamps a 3×3 meadow instead of a single cell. Press `Y` to deploy an **auto-harvester** (40⚡, max 3): a floating collector ring that vacuums any orb drifting within radius 12. Upgrades apply to every world you fly, in both versions, and persist across sessions.
 
+### 🌍 New worlds — alternate rules of Life (v8)
+
+The simulation engine now runs **any Life-like B/S rule**, and the game ships four worlds. Pick one on the title screen or press **`0`** in game to cycle. Your pilot, XP, genetics and journal carry across all of them:
+
+| World | Rule | How it plays | Unlock |
+|---|---|---|---|
+| **Life** | B3/S23 | The classic home world — everything in this README | open |
+| **Day & Night** | B3678/S34678 | A symmetric rule: dark regions behave exactly like live ones. Seeded from a 45% soup; territory blobs churn and invert | open |
+| **HighLife** | B36/S23 | "The game Conway should have found." Nearly identical to Life… except it has the **Replicator** — a 12-cell pattern that copies itself every 12 generations. Stamp it as a seed (25⚡) and watch your garden clone itself. Discovering one in the wild is journal entry #13 | pilot level 5 |
+| **Crystals** | B3/S012345678 | *Life without Death*: cells never die. Veins of crystal grow from four tiny seeds and never recede — **explosions are your only mining tool** (tower lifespan 60 here). Sculpt, then blast | pilot level 8 |
+
+Gliders, blinkers, blocks and most classic patterns behave identically in HighLife, so your tools still work — they just occasionally do something *new*. The **daily challenge rotates rules by date**: the date seed picks both the world and the layout, identically for everyone.
+
 Your pilot earns a **rank title** as they level: Sprout Tender → Seed Sower → Groundskeeper → Landscape Architect → Master Gardener → Worldshaper. The Genetics Lab also keeps your **records** — biggest blast, tallest tower, best daily score, fires doused — and your **daily streak**: score the daily challenge on consecutive days and every 3rd day pays a bonus skill point.
 
 ### 🌍 Wildlands: weather, events & ecology
@@ -149,6 +162,7 @@ Xbox-layout pads work natively — including the **ROG Ally X** (put it in **Gam
 | Place / erase cell (screen centre) | `F` / `G` (or click the ground) |
 | Brush species | `1` / `2` / `3` |
 | Seed tools | `4` – `9` (aim at the ground) |
+| Cycle world | `0` |
 | Cycle / place seed | `Q` / `E` |
 | Genetics Lab | `U` (web modal · Godot overlay, `1`–`4` to spend SP) |
 | Auto-harvester | `Y` (40⚡) |

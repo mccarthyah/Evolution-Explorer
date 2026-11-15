@@ -86,6 +86,7 @@ const TOOL_CATALOG = [
   { id: 'stasis', key: '8', name: 'Stasis Field', cost: 15, kind: 'stasis' },
   { id: 'gun', key: '9', name: 'Glider Gun', cost: 60, rows: GUN_ROWS },
   { id: 'lwss', key: null, name: 'Lightweight Ship', cost: 15, rows: LWSS_ROWS, unlock: { discover: 'Lightweight Ship' } },
+  { id: 'replicator', key: null, name: 'Replicator', cost: 25, rows: REPLICATOR_ROWS, unlock: { world: 'highlife' } },
   { id: 'monsoon', key: null, name: 'Monsoon', cost: 30, kind: 'monsoon', unlock: { level: 4 } },
   { id: 'acorn', key: null, name: 'Acorn', cost: 20, rows: ACORN_ROWS, unlock: { level: 5 } },
   { id: 'simkin', key: null, name: 'Simkin Gun', cost: 45, rows: SIMKIN_ROWS, unlock: { level: 6 } },
@@ -119,6 +120,7 @@ const JOURNAL = [
   { name: 'Lightweight Ship', rows: ['.O..O', 'O....', 'O...O', 'OOOO.'], desc: 'spaceship, c/2 orthogonal' },
   { name: 'Pulsar', rows: PULSAR_ROWS, desc: 'oscillator, period 3' },
   { name: 'Glider Gun', rows: GUN_ROWS, desc: 'Gosper gun — endless gliders' },
+  { name: 'Replicator', rows: REPLICATOR_ROWS, desc: 'HighLife — copies itself every 12 gens' },
 ];
 const SIG_MAP = (() => {
   const pts = rows => { const a = []; for (let r = 0; r < rows.length; r++) for (let c = 0; c < rows[r].length; c++) if (rows[r][c] !== '.') a.push([c, r]); return a; };
@@ -178,6 +180,31 @@ let dailyMode = false, dailyScored = false;
 let minimapOn = true, minimapTimer = 0;
 const MM_COLORS = ['#26e3ff', '#ff3db8', '#8aff61'];
 
+/* ── v8 New Worlds: generalized Life-like rule engine ──
+   A world = B/S rule + seed style + tower pacing. Rule masks are bitmasks over
+   neighbour counts (bit n set = that count triggers birth/survival). */
+const REPLICATOR_ROWS = ['..OOO', '.O..O', 'O...O', 'O..O.', 'OOO.'];
+const _bsMask = s => [...s].reduce((m, c) => m | (1 << (+c)), 0);
+const WORLDS = [
+  { id: 'life', name: 'Life', bs: 'B3/S23', patches: 16, radius: [3, 8], density: 0.34, tower: 40,
+    unlock: null, desc: 'the classic home world' },
+  { id: 'daynight', name: 'Day & Night', bs: 'B3678/S34678', soup: 0.45, tower: 40,
+    unlock: null, desc: 'symmetric rule — dark regions behave like live ones' },
+  { id: 'highlife', name: 'HighLife', bs: 'B36/S23', patches: 16, radius: [3, 8], density: 0.34, tower: 40,
+    unlock: { level: 5 }, desc: 'home of the replicator' },
+  { id: 'crystal', name: 'Crystals', bs: 'B3/S012345678', patches: 4, radius: [1, 1], density: 0.6, tower: 60,
+    unlock: { level: 8 }, desc: 'Life without Death — cells never die; mine with explosions' },
+];
+for (const w of WORLDS) {
+  const [b, s] = w.bs.slice(1).split('/S');
+  w.birthMask = _bsMask(b);
+  w.surviveMask = _bsMask(s);
+}
+const WORLDS_BY_ID = Object.fromEntries(WORLDS.map(w => [w.id, w]));
+let selectedWorldId = 'life';   /* the pilot's free-play choice */
+let activeWorld = WORLDS[0];    /* what is simulating now (daily may override) */
+function unlockedWorlds() { return WORLDS.filter(w => !w.unlock || pilot.worlds.includes(w.id)); }
+
 /* ── Pilot progression: XP, levels, genetics, unlocks (persists) ── */
 const HARVESTER_COST = 40, HARVESTER_MAX = 3, HARVESTER_RADIUS = 12;
 let pilot = {
@@ -186,6 +213,7 @@ let pilot = {
   tools: ['rpento', 'glider', 'pulsar', 'rain', 'stasis', 'gun'],
   rec: { biggestBlast: 0, tallestTower: 0, bestDaily: 0, firesOut: 0 },
   streak: { last: '', count: 0 },
+  worlds: ['life', 'daynight'],
 };
 let selectedToolIdx = 0;
 function loadPilot() {
@@ -203,6 +231,10 @@ function loadPilot() {
     pilot.areaBrush = !!d.areaBrush;
     if (d.rec) for (const k of Object.keys(pilot.rec)) pilot.rec[k] = d.rec[k] | 0;
     if (d.streak) pilot.streak = { last: String(d.streak.last || ''), count: d.streak.count | 0 };
+    if (Array.isArray(d.worlds) && d.worlds.length) {
+      const base = ['life', 'daynight'];
+      pilot.worlds = [...new Set([...base, ...d.worlds.filter(id => WORLDS_BY_ID[id])])];
+    }
   } catch (e) { }
 }
 function savePilot() {
@@ -215,6 +247,7 @@ function resetPilot() {
     tools: ['rpento', 'glider', 'pulsar', 'rain', 'stasis', 'gun'],
     rec: { biggestBlast: 0, tallestTower: 0, bestDaily: 0, firesOut: 0 },
     streak: { last: '', count: 0 },
+    worlds: ['life', 'daynight'],
   };
   savePilot();
 }
@@ -244,6 +277,17 @@ function checkLevelUnlocks() {
       toast(`🔓 <b>New seed unlocked: ${t.name}</b> (${t.cost}⚡) — Q/E to select`, 5000, 'gold');
     }
   }
+  for (const w of WORLDS) {
+    if (w.unlock && w.unlock.level === pilot.level && !pilot.worlds.includes(w.id)) {
+      pilot.worlds.push(w.id);
+      toast(`🌍 <b>New world unlocked: ${w.name}</b> — ${w.desc}<br>Press <b>0</b> in game or pick it on the title screen`, 5600, 'gold');
+      if (w.id === 'highlife' && !pilot.tools.includes('replicator')) {
+        pilot.tools.push('replicator');
+        toast('🔓 <b>New seed unlocked: Replicator</b> (25⚡) — it copies itself!', 5600, 'gold');
+      }
+      refreshWorldButtons();
+    }
+  }
   if (pilot.level >= 7 && !pilot.areaBrush) {
     pilot.areaBrush = true;
     toast('🔓 <b>Area Brush unlocked</b> — F now stamps 3×3 meadows', 5000, 'gold');
@@ -259,7 +303,7 @@ function checkDiscoverUnlock(name) {
   }
 }
 /* Genetics derived values */
-const towerLifespan = () => TOWER_LIFESPAN + 7 * pilot.up.vigor;
+const towerLifespan = () => activeWorld.tower + 7 * pilot.up.vigor;
 const memoryGain = () => 0.065 * (1 + 0.5 * pilot.up.fertility) * (pollenGens > 0 ? 2 : 1);
 const orbCount = () => 3 + pilot.up.volatility;
 const orbValue = () => ORB_VALUE + pilot.up.magnetism;
@@ -644,15 +688,20 @@ function seedWorld() {
   explosionsTotal = 0; lastExplosion = 'NONE';
   historyFrames = [];
   if (historyMode) { historyMode = false; running = wasRunningBeforeHistory; $('replay-bar').classList.add('hidden'); }
-  for (let k = 0; k < 16; k++) {
-    const cx = rndRange(6, GRID - 7);
-    const cz = rndRange(6, GRID - 7);
-    const radius = rndRange(3, 8);
-    const species = rndRange(1, 3);
-    for (let z = Math.max(0, cz - radius); z <= Math.min(GRID - 1, cz + radius); z++)
-      for (let x = Math.max(0, cx - radius); x <= Math.min(GRID - 1, cx + radius); x++) {
-        if (Math.hypot(x - cx, z - cz) < radius && rnd() < 0.34) cells[idxOf(x, z)] = species;
-      }
+  const W = activeWorld;
+  if (W.soup) {
+    for (let i = 0; i < TOTAL; i++) if (rnd() < W.soup) cells[i] = rndRange(1, 3);
+  } else {
+    for (let k = 0; k < W.patches; k++) {
+      const cx = rndRange(6, GRID - 7);
+      const cz = rndRange(6, GRID - 7);
+      const radius = rndRange(W.radius[0], W.radius[1]);
+      const species = rndRange(1, 3);
+      for (let z = Math.max(0, cz - radius); z <= Math.min(GRID - 1, cz + radius); z++)
+        for (let x = Math.max(0, cx - radius); x <= Math.min(GRID - 1, cx + radius); x++) {
+          if (Math.hypot(x - cx, z - cz) < radius && rnd() < W.density) cells[idxOf(x, z)] = species;
+        }
+    }
   }
   generations = 0;
   eventCountdown = 55 + Math.floor(rnd() * 25);
@@ -672,8 +721,8 @@ function stepSimulation() {
       if (nb > 0) { neighbours++; votes[nb - 1]++; }
     }
     const living = cells[i];
-    if (living !== 0 && (neighbours === 2 || neighbours === 3)) nextCells[i] = living;
-    else if (living === 0 && neighbours === 3) {
+    if (living !== 0 && (activeWorld.surviveMask & (1 << neighbours))) nextCells[i] = living;
+    else if (living === 0 && (activeWorld.birthMask & (1 << neighbours))) {
       let winner = 0;
       for (let s = 1; s < 3; s++) if (votes[s] > votes[winner]) winner = s;
       nextCells[i] = winner + 1;
@@ -1024,7 +1073,10 @@ function useTool(id) {
   if (historyMode) { AudioSys.err(); toast('⏳ Exit replay (H) before using tools', 2200, 'err'); return; }
   if (!pilot.tools.includes(id)) {
     AudioSys.err();
-    toast(`🔒 <b>${tool.name}</b> is locked — ${tool.unlock && tool.unlock.level ? `reach level ${tool.unlock.level}` : 'discover it in the wild'}`, 2600, 'err');
+    const hint = tool.unlock && tool.unlock.level ? `reach level ${tool.unlock.level}`
+      : tool.unlock && tool.unlock.world ? `unlock the ${WORLDS_BY_ID[tool.unlock.world].name} world`
+      : 'discover it in the wild';
+    toast(`🔒 <b>${tool.name}</b> is locked — ${hint}`, 2600, 'err');
     return;
   }
   if (biomass < tool.cost) {
@@ -1145,7 +1197,19 @@ window.addEventListener('keydown', e => {
   }
   if (k === 'escape' || k === 'p') running = !running;
   else if (k === 'n') { if (!running) stepSimulation(); }
-  else if (k === 'r') { dailyMode = false; rngState = null; seedWorld(); }
+  else if (k === 'r') { dailyMode = false; rngState = null; activeWorld = WORLDS_BY_ID[selectedWorldId] || WORLDS[0]; seedWorld(); }
+  else if (k === '0') {
+    const list = unlockedWorlds();
+    if (list.length > 1) {
+      const idx = list.findIndex(w => w.id === selectedWorldId);
+      selectedWorldId = list[(idx + 1) % list.length].id;
+      dailyMode = false; rngState = null; activeWorld = WORLDS_BY_ID[selectedWorldId];
+      seedWorld();
+      AudioSys.buy();
+      refreshWorldButtons();
+      toast(`🌍 <b>${activeWorld.name}</b> — ${activeWorld.desc}<br>Rule ${activeWorld.bs}`, 4600, 'gold');
+    }
+  }
   else if (k === 'c') {
     cells.fill(0); ages.fill(0); history.fill(0); generations = 0; population = 0;
     snapshots = []; tracks = new Map(); queue = []; cooldowns.fill(0);
@@ -1189,7 +1253,7 @@ function toast(html, dur = 3000, cls = '') {
   setTimeout(() => { t.classList.add('out'); setTimeout(() => t.remove(), 450); }, dur);
 }
 function updateHUD() {
-  const mode = historyMode ? 'REPLAY' : (overview ? 'OVERVIEW' : (dailyMode ? 'DAILY CHALLENGE' : 'FLIGHT'));
+  const mode = historyMode ? 'REPLAY' : (overview ? 'OVERVIEW' : (dailyMode ? `DAILY · ${activeWorld.name.toUpperCase()}` : `FLIGHT · ${activeWorld.name.toUpperCase()}`));
   let t =
     `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}\nExplosions ${explosionsTotal}  |  Last ${lastExplosion}\n⚡ Biomass ${biomass}   |   🔬 ${discoveries.size}/${JOURNAL.length}   |   Contract ${contractHudText()}`;
   if (historyMode) t += `\n⏳ REPLAY ${historyView + 1}/${historyFrames.length}  —  , / . scrub (Shift ×10)  —  H to return`;
@@ -1206,7 +1270,7 @@ function updateHUD() {
 
 /* ── Genetics Lab (upgrade modal) ── */
 const UPGRADE_INFO = [
-  { id: 'vigor', name: 'Vigor', desc: l => `Tower lifespan ${TOWER_LIFESPAN + 7 * l} generations` },
+  { id: 'vigor', name: 'Vigor', desc: l => `Tower lifespan ${activeWorld.tower + 7 * l} generations (this world)` },
   { id: 'fertility', name: 'Fertility', desc: l => `Memory gain +${50 * l}% — taller pillars, longer ghosts` },
   { id: 'volatility', name: 'Volatility', desc: l => `${3 + l} biomass orbs per detonation` },
   { id: 'magnetism', name: 'Magnetism', desc: l => `Orbs worth ${5 + l}⚡ · collect radius ${(2.6 + 0.8 * l).toFixed(1)}` },
@@ -1285,9 +1349,10 @@ function dailySeedHash() {
 function startDaily() {
   dailyMode = true; dailyScored = false;
   rngState = dailySeedHash();
+  activeWorld = WORLDS[dailySeedHash() % WORLDS.length];
   seedWorld();
   AudioSys.fanfare();
-  toast(`📅 <b>DAILY CHALLENGE ${dailyDateString()}</b><br>Same seed for everyone — score lands at generation 300`, 5200, 'gold');
+  toast(`📅 <b>DAILY CHALLENGE ${dailyDateString()}</b><br>World: <b>${activeWorld.name}</b> (${activeWorld.bs}) — same seed &amp; rule for everyone<br>Score lands at generation 300`, 5600, 'gold');
 }
 function scoreDaily() {
   dailyScored = true;
@@ -1494,6 +1559,27 @@ function startGame() {
   if (gamepadIndex !== null) toast('🎮 Controller: sticks fly · RT/LT rise/fall · LB boost · A/B paint', 5000);
 }
 $('play-btn').addEventListener('click', startGame);
+function refreshWorldButtons() {
+  for (const b of document.querySelectorAll('.world-btn')) {
+    const w = WORLDS_BY_ID[b.dataset.world];
+    if (!w) continue;
+    const unlocked = !w.unlock || pilot.worlds.includes(w.id);
+    b.classList.toggle('locked', !unlocked);
+    b.classList.toggle('sel', selectedWorldId === w.id);
+    b.innerHTML = unlocked ? w.name : `🔒 ${w.name} · Lv ${w.unlock.level}`;
+  }
+}
+for (const b of document.querySelectorAll('.world-btn')) b.addEventListener('click', () => {
+  const w = WORLDS_BY_ID[b.dataset.world];
+  if (!w) return;
+  if (w.unlock && !pilot.worlds.includes(w.id)) { AudioSys.err(); toast(`🔒 <b>${w.name}</b> unlocks at pilot level ${w.unlock.level}`, 2600, 'err'); return; }
+  selectedWorldId = w.id; dailyMode = false; rngState = null; activeWorld = w;
+  seedWorld();
+  AudioSys.buy();
+  refreshWorldButtons();
+  toast(`🌍 <b>${w.name}</b> — ${w.desc}<br>Rule ${w.bs}`, 4600, 'gold');
+});
+refreshWorldButtons();
 
 /* ─────────────────────────── GAMEPAD (Xbox layout — ROG Ally X etc.) ── */
 let gamepadIndex = null, prevPadButtons = [], padTool = 0;

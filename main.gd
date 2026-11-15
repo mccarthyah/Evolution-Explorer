@@ -79,6 +79,7 @@ const TOOL_CATALOG: Array = [
 	{"id": "stasis", "name": "Stasis Field", "cost": 15, "kind": "stasis"},
 	{"id": "gun", "name": "Glider Gun", "cost": 60, "rows": GUN_ROWS},
 	{"id": "lwss", "name": "Lightweight Ship", "cost": 15, "rows": LWSS_ROWS, "unlock": {"discover": "Lightweight Ship"}},
+	{"id": "replicator", "name": "Replicator", "cost": 25, "rows": REPLICATOR_ROWS, "unlock": {"world": "highlife"}},
 	{"id": "monsoon", "name": "Monsoon", "cost": 30, "kind": "monsoon", "unlock": {"level": 4}},
 	{"id": "acorn", "name": "Acorn", "cost": 20, "rows": ACORN_ROWS, "unlock": {"level": 5}},
 	{"id": "simkin", "name": "Simkin Gun", "cost": 45, "rows": SIMKIN_ROWS, "unlock": {"level": 6}},
@@ -157,6 +158,7 @@ const JOURNAL_PATTERNS: Array = [
 	{"name": "Lightweight Ship", "rows": [".O..O", "O....", "O...O", "OOOO."], "desc": "spaceship c/2"},
 	{"name": "Pulsar", "rows": PULSAR_ROWS, "desc": "oscillator p3"},
 	{"name": "Glider Gun", "rows": GUN_ROWS, "desc": "endless gliders"},
+	{"name": "Replicator", "rows": REPLICATOR_ROWS, "desc": "HighLife — copies itself every 12 gens"},
 ]
 var discoveries: Dictionary = {}
 var journal_sigs: Dictionary = {}
@@ -193,6 +195,7 @@ var pilot: Dictionary = {
 	"tools": ["rpento", "glider", "pulsar", "rain", "stasis", "gun"],
 	"rec": {"biggestBlast": 0, "tallestTower": 0, "bestDaily": 0, "firesOut": 0},
 	"streak": {"last": "", "count": 0},
+	"worlds": ["life", "daynight"],
 }
 var tool_by_id: Dictionary = {}
 var selected_tool_idx: int = 0
@@ -210,6 +213,44 @@ var fires: Dictionary = {}
 var meteor: Dictionary = {}
 var fires_out: int = 0
 var last_record_toast_ms: int = 0
+
+# ── v8 New Worlds: generalized Life-like rule engine ──
+const REPLICATOR_ROWS: Array = ["..OOO", ".O..O", "O...O", "O..O.", "OOO."]
+var WORLDS: Array = [
+	{"id": "life", "name": "Life", "bs": "B3/S23", "patches": 16, "radius": [3, 8], "density": 0.34, "tower": 40,
+		"desc": "the classic home world"},
+	{"id": "daynight", "name": "Day & Night", "bs": "B3678/S34678", "soup": 0.45, "tower": 40,
+		"desc": "symmetric rule — dark regions behave like live ones"},
+	{"id": "highlife", "name": "HighLife", "bs": "B36/S23", "patches": 16, "radius": [3, 8], "density": 0.34, "tower": 40,
+		"unlock": {"level": 5}, "desc": "home of the replicator"},
+	{"id": "crystal", "name": "Crystals", "bs": "B3/S012345678", "patches": 4, "radius": [1, 1], "density": 0.6, "tower": 60,
+		"unlock": {"level": 8}, "desc": "Life without Death — cells never die; mine with explosions"},
+]
+var worlds_by_id: Dictionary = {}
+var selected_world_id: String = "life"
+var active_world: Dictionary = {}
+
+func unlocked_worlds() -> Array:
+	var list: Array = []
+	for w in WORLDS:
+		if not w.has("unlock") or (pilot["worlds"] as Array).has(w["id"]):
+			list.append(w)
+	return list
+
+func cycle_world() -> void:
+	var wlist: Array = unlocked_worlds()
+	if wlist.size() < 2:
+		return
+	var widx: int = 0
+	for wi in range(wlist.size()):
+		if String(wlist[wi]["id"]) == selected_world_id:
+			widx = wi
+	selected_world_id = String(wlist[(widx + 1) % wlist.size()]["id"])
+	daily_mode = false
+	rng_state = -1
+	active_world = worlds_by_id[selected_world_id]
+	seed_world()
+	show_banner("🌍 %s — %s  (%s)" % [String(active_world["name"]), String(active_world["desc"]), String(active_world["bs"])], Color(1.0, 0.85, 0.3))
 
 var mesh_instance: MultiMeshInstance3D
 var multimesh: MultiMesh
@@ -230,6 +271,18 @@ func _ready() -> void:
 	explosion_cooldowns.resize(TOTAL)
 	warning_timers.resize(TOTAL)
 	build_world()
+	for w in WORLDS:
+		var rule_parts: PackedStringArray = String(w["bs"]).substr(1).split("/S")
+		var bmask: int = 0
+		for ch in rule_parts[0]:
+			bmask |= 1 << int(ch)
+		var smask: int = 0
+		for ch in rule_parts[1]:
+			smask |= 1 << int(ch)
+		w["birth_mask"] = bmask
+		w["survive_mask"] = smask
+		worlds_by_id[w["id"]] = w
+	active_world = WORLDS[0]
 	seed_world()
 	biomass = STARTING_BIOMASS
 	build_journal_sigs()
@@ -315,6 +368,7 @@ func build_world() -> void:
 	hint.text += "\nK minimap  |  H replay (, / . scrub)  |  D daily challenge"
 	hint.text += "\nU genetics lab  |  Q/E select/place seeds  |  Y auto-harvester 40⚡"
 	hint.text += "\n🌍 Weather strikes: ☄️ meteors · 🔥 wildfire · 🌌 aurora ×2XP · 🌸 pollen — species RPS ecology"
+	hint.text += "\n0 cycle worlds  |  Life · Day & Night · HighLife (Lv5) · Crystals (Lv8)"
 	toast_label = Label.new()
 	toast_label.position = Vector2(420.0, 92.0)
 	toast_label.add_theme_font_size_override("font_size", 19)
@@ -369,15 +423,20 @@ func seed_world() -> void:
 	if history_mode:
 		history_mode = false
 		running = was_running_before_history
-	for k in range(16):
-		var cx: int = rnd_range(6, GRID - 7)
-		var cz: int = rnd_range(6, GRID - 7)
-		var radius: int = rnd_range(3, 8)
-		var species: int = rnd_range(1, 3)
-		for z in range(maxi(0, cz - radius), mini(GRID, cz + radius + 1)):
-			for x in range(maxi(0, cx - radius), mini(GRID, cx + radius + 1)):
-				if Vector2(x - cx, z - cz).length() < float(radius) and rnd() < 0.34:
-					cells[index_of(x, z)] = species
+	if active_world.has("soup"):
+		for i in range(TOTAL):
+			if rnd() < float(active_world["soup"]):
+				cells[i] = rnd_range(1, 3)
+	else:
+		for k in range(int(active_world["patches"])):
+			var cx: int = rnd_range(6, GRID - 7)
+			var cz: int = rnd_range(6, GRID - 7)
+			var radius: int = rnd_range(int(active_world["radius"][0]), int(active_world["radius"][1]))
+			var species: int = rnd_range(1, 3)
+			for z in range(maxi(0, cz - radius), mini(GRID, cz + radius + 1)):
+				for x in range(maxi(0, cx - radius), mini(GRID, cx + radius + 1)):
+					if Vector2(x - cx, z - cz).length() < float(radius) and rnd() < float(active_world["density"]):
+						cells[index_of(x, z)] = species
 	generations = 0
 	event_countdown = 55 + rnd_range(0, 24)
 	pollen_gens = 0
@@ -416,9 +475,9 @@ func step_simulation() -> void:
 						neighbours += 1
 						votes[neighbour - 1] += 1
 			var living: int = int(cells[i])
-			if living != 0 and (neighbours == 2 or neighbours == 3):
+			if living != 0 and (int(active_world["survive_mask"]) & (1 << neighbours)) != 0:
 				next_cells[i] = living
-			elif living == 0 and neighbours == 3:
+			elif living == 0 and (int(active_world["birth_mask"]) & (1 << neighbours)) != 0:
 				var winner: int = 0
 				for s in range(1, 3):
 					if votes[s] > votes[winner]:
@@ -774,13 +833,13 @@ func _process(delta: float) -> void:
 		blasts[b]["ttl"] = float(blasts[b]["ttl"]) - delta
 		if float(blasts[b]["ttl"]) <= 0.0:
 			blasts.remove_at(b)
-	var mode: String = "FLIGHT"
+	var mode: String = "FLIGHT · %s" % String(active_world["name"]).to_upper()
 	if history_mode:
 		mode = "REPLAY"
 	elif overview:
 		mode = "OVERVIEW"
 	elif daily_mode:
-		mode = "DAILY CHALLENGE"
+		mode = "DAILY · %s" % String(active_world["name"]).to_upper()
 	hud.text = "EVOLUTION  /  LIVING TERRAIN\nGeneration %d     Alive %d     %s\n%s   |   %.1f gen/sec   |   Height %.1fx   |   Memory %s   |   Brush %d" % [generations, population, mode, "RUNNING" if running else "PAUSED", 1.0 / generation_interval, height_scale, "ON" if memory_enabled else "OFF", brush_species]
 	hud.text += "\nExplosions %d  |  Last %s" % [explosions_total, last_explosion]
 	hud.text += "\n⚡ Biomass %d   |   🔬 %d/%d   |   Contract %s" % [biomass, discoveries.size(), JOURNAL_PATTERNS.size(), contract_hud_text()]
@@ -897,7 +956,10 @@ func _unhandled_input(event: InputEvent) -> void:
 		KEY_R:
 			daily_mode = false
 			rng_state = -1
+			active_world = worlds_by_id[selected_world_id]
 			seed_world()
+		KEY_0:
+			cycle_world()
 			KEY_C:
 				for i in range(TOTAL):
 					cells[i] = 0
@@ -1070,6 +1132,8 @@ func use_tool(id: String) -> void:
 		var lock_hint: String = "discover it in the wild"
 		if tool.has("unlock") and tool["unlock"].has("level"):
 			lock_hint = "reach level %d" % int(tool["unlock"]["level"])
+		elif tool.has("unlock") and tool["unlock"].has("world"):
+			lock_hint = "unlock the %s world" % String(worlds_by_id[tool["unlock"]["world"]]["name"])
 		show_banner("%s is locked — %s" % [tool["name"], lock_hint], Color(1.0, 0.55, 0.6))
 		return
 	if biomass < cost:
@@ -1500,8 +1564,9 @@ func start_daily() -> void:
 	daily_mode = true
 	daily_scored = false
 	rng_state = daily_seed_hash()
+	active_world = WORLDS[daily_seed_hash() % WORLDS.size()]
 	seed_world()
-	show_banner("📅 DAILY CHALLENGE %s — score lands at generation 300" % Time.get_date_string_from_system(), Color(1.0, 0.85, 0.3))
+	show_banner("📅 DAILY CHALLENGE %s — %s (%s), score at generation 300" % [Time.get_date_string_from_system(), active_world["name"], active_world["bs"]], Color(1.0, 0.85, 0.3))
 
 func score_daily() -> void:
 	daily_scored = true
@@ -1582,6 +1647,10 @@ func load_pilot() -> void:
 	for id in saved_tools:
 		if not (pilot["tools"] as Array).has(id) and tool_by_id.has(id):
 			(pilot["tools"] as Array).append(id)
+	var saved_worlds: Array = config.get_value("worlds", "ids", [])
+	for id in saved_worlds:
+		if not (pilot["worlds"] as Array).has(id) and worlds_by_id.has(id):
+			(pilot["worlds"] as Array).append(id)
 	pilot["rec"] = {
 		"biggestBlast": int(config.get_value("rec", "biggest_blast", 0)),
 		"tallestTower": int(config.get_value("rec", "tallest_tower", 0)),
@@ -1601,6 +1670,7 @@ func save_pilot() -> void:
 	for track in ["vigor", "fertility", "volatility", "magnetism"]:
 		config.set_value("up", track, pilot["up"][track])
 	config.set_value("tools", "ids", pilot["tools"])
+	config.set_value("worlds", "ids", pilot["worlds"])
 	config.set_value("rec", "biggest_blast", pilot["rec"]["biggestBlast"])
 	config.set_value("rec", "tallest_tower", pilot["rec"]["tallestTower"])
 	config.set_value("rec", "best_daily", pilot["rec"]["bestDaily"])
@@ -1634,6 +1704,13 @@ func check_level_unlocks() -> void:
 		if tool.has("unlock") and tool["unlock"].has("level") and int(tool["unlock"]["level"]) == int(pilot["level"]) and not (pilot["tools"] as Array).has(tool_id):
 			(pilot["tools"] as Array).append(tool_id)
 			show_banner("🔓 New seed unlocked: %s (%d⚡) — Q/E to select" % [tool["name"], int(tool["cost"])], Color(1.0, 0.85, 0.3))
+	for w in WORLDS:
+		if w.has("unlock") and int(w["unlock"]["level"]) == int(pilot["level"]) and not (pilot["worlds"] as Array).has(w["id"]):
+			(pilot["worlds"] as Array).append(w["id"])
+			show_banner("🌍 New world unlocked: %s — %s (press 0)" % [w["name"], w["desc"]], Color(1.0, 0.85, 0.3))
+			if String(w["id"]) == "highlife" and not (pilot["tools"] as Array).has("replicator"):
+				(pilot["tools"] as Array).append("replicator")
+				show_banner("🔓 New seed unlocked: Replicator — it copies itself!", Color(1.0, 0.85, 0.3))
 	if int(pilot["level"]) >= 7 and not pilot["area_brush"]:
 		pilot["area_brush"] = true
 		show_banner("🔓 Area Brush unlocked — F stamps 3×3 meadows", Color(1.0, 0.85, 0.3))
@@ -1646,7 +1723,7 @@ func check_discover_unlock(pname: String) -> void:
 			save_pilot()
 
 func tower_lifespan() -> int:
-	return TOWER_LIFESPAN + 7 * int(pilot["up"]["vigor"])
+	return int(active_world.get("tower", TOWER_LIFESPAN)) + 7 * int(pilot["up"]["vigor"])
 
 func memory_gain() -> float:
 	return 0.065 * (1.0 + 0.5 * float(pilot["up"]["fertility"])) * (2.0 if pollen_gens > 0 else 1.0)
@@ -1664,7 +1741,7 @@ func refresh_upgrade_label() -> void:
 	if upgrade_label == null:
 		return
 	var t: String = "🧬 GENETICS LAB — %s  ·  SP %d\n\n" % [rank_title(), int(pilot["sp"])]
-	t += "1 Vigor      [%s]  tower lifespan %d\n" % [pips("vigor"), tower_lifespan()]
+	t += "1 Vigor      [%s]  tower lifespan %d (this world)\n" % [pips("vigor"), tower_lifespan()]
 	t += "2 Fertility  [%s]  memory gain +%.0f%%\n" % [pips("fertility"), 50.0 * float(pilot["up"]["fertility"])]
 	t += "3 Volatility [%s]  %d orbs per blast\n" % [pips("volatility"), orb_count()]
 	t += "4 Magnetism  [%s]  orbs %d⚡, radius %.1f\n\n" % [pips("magnetism"), orb_value(), collect_radius()]
