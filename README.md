@@ -31,7 +31,7 @@ Or deploy to GitHub Pages: **Settings → Pages → Deploy from branch → `main
 
 ## 🎮 The gardener loop: observe → intervene → harvest → unlock
 
-A 48×48 Conway B3/S23 world with **3 species** (cyan / magenta / green). Newborns inherit the majority species of their parents. Every live cell is a pillar:
+A **64×64** Conway B3/S23 world with **3 species** (cyan / magenta / green). Newborns inherit the majority species of their parents. Every live cell is a pillar:
 
 - 🟦 **Height = age** — `1.4 + 12·√(age/65) + 11·memory`, so pillars grow fast early, then level off
 - 👻 **Terrain memory** — dead cells leave ghost pillars that slowly fade (`M` toggles it)
@@ -102,7 +102,9 @@ Press `J` to open the journal. Explosions scatter gliders and blocks as debris, 
 
 ### 💾 Save & share ecosystems
 
-Press `S` for a compact **EVO1 code** (run-length encoded, species included) — web copies it to your clipboard with a share modal; Godot puts it on the clipboard directly. Anyone can press `L` and paste it to take over your exact world.
+Press `S` for a compact **EVO1 code** (run-length encoded, species included) — web copies it to your clipboard with a share modal; Godot puts it on the clipboard directly. Anyone can press `L` and paste it to take over your exact world. Codes from the older 48×48 version still load — they're centred in the bigger field.
+
+> **v7.1 "Open Skies"** grew the field from 48×48 to **64×64**, slimmed the pillars (~20% narrower), and dropped world-gen density from ~30% to ~12% — same lively ecosystems, far more sky between them. Ghost-memory pillars are also slightly shorter so dead terrain reads as quiet ground rather than clutter.
 
 ### 🗺️ Minimap, ⏳ replay & 📅 daily challenge
 

@@ -2,7 +2,7 @@ extends Node3D
 ## EVOLUTION: Living Terrain — Conway B3/S23 on a 2D grid, rendered in 3D.
 ## No addons, external assets, or individual nodes per cell required.
 
-const GRID: int = 48
+const GRID: int = 64
 const TOTAL: int = GRID * GRID
 const SPACING: float = 1.15
 const MAX_AGE: int = 65
@@ -240,7 +240,7 @@ func _ready() -> void:
 
 func build_world() -> void:
 	var box: BoxMesh = BoxMesh.new()
-	box.size = Vector3(0.91, 1.0, 0.91)
+	box.size = Vector3(0.74, 1.0, 0.74)
 	var mat: StandardMaterial3D = StandardMaterial3D.new()
 	mat.vertex_color_use_as_albedo = true
 	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
@@ -294,7 +294,7 @@ func build_world() -> void:
 	camera.current = true
 	camera.fov = 78.0
 	camera.far = 650.0
-	camera.position = Vector3(0.0, 16.0, 40.0)
+	camera.position = Vector3(0.0, 20.0, 50.0)
 	camera.rotation = Vector3(-0.30, 0.0, 0.0)
 	add_child(camera)
 
@@ -369,14 +369,14 @@ func seed_world() -> void:
 	if history_mode:
 		history_mode = false
 		running = was_running_before_history
-	for k in range(17):
+	for k in range(16):
 		var cx: int = rnd_range(6, GRID - 7)
 		var cz: int = rnd_range(6, GRID - 7)
-		var radius: int = rnd_range(4, 9)
+		var radius: int = rnd_range(3, 8)
 		var species: int = rnd_range(1, 3)
 		for z in range(maxi(0, cz - radius), mini(GRID, cz + radius + 1)):
 			for x in range(maxi(0, cx - radius), mini(GRID, cx + radius + 1)):
-				if Vector2(x - cx, z - cz).length() < float(radius) and rnd() < 0.37:
+				if Vector2(x - cx, z - cz).length() < float(radius) and rnd() < 0.34:
 					cells[index_of(x, z)] = species
 	generations = 0
 	event_countdown = 55 + rnd_range(0, 24)
@@ -828,7 +828,7 @@ func update_visuals(delta: float) -> void:
 			var living: int = int(cells[i])
 			var age_factor: float = float(ages[i]) / float(MAX_AGE)
 			var terrain_memory: float = history[i] if memory_enabled else 0.0
-			var target: float = (1.4 + 12.0 * sqrt(age_factor) + 11.0 * terrain_memory) * height_scale if living != 0 else (8.0 * terrain_memory * height_scale)
+			var target: float = (1.4 + 12.0 * sqrt(age_factor) + 11.0 * terrain_memory) * height_scale if living != 0 else (6.5 * terrain_memory * height_scale)
 			heights[i] = lerpf(heights[i], target, minf(1.0, delta * 5.5))
 			var h: float = maxf(0.025, heights[i])
 			var pos: Vector3 = Vector3((float(x) - float(GRID - 1) * 0.5) * SPACING, h * 0.5, (float(z) - float(GRID - 1) * 0.5) * SPACING)
@@ -916,10 +916,10 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_V:
 				overview = not overview
 				if overview:
-					camera.position = Vector3(0.0, 85.0, 60.0)
+					camera.position = Vector3(0.0, 105.0, 72.0)
 					camera.rotation = Vector3(-0.95, 0.0, 0.0)
 				else:
-					camera.position = Vector3(0.0, 16.0, 32.0)
+					camera.position = Vector3(0.0, 20.0, 42.0)
 					camera.rotation = Vector3(-0.30, 0.0, 0.0)
 			KEY_BRACKETLEFT:
 				generation_interval = minf(2.0, generation_interval * 1.25)
@@ -1377,14 +1377,15 @@ func decode_ecosystem(code: String) -> bool:
 	var parts: PackedStringArray = code.strip_edges().split(";", false)
 	if parts.size() != 3 or parts[0] != "EVO1":
 		return false
-	if int(parts[1]) != GRID:
+	var n_grid: int = int(parts[1])
+	if n_grid < 8 or n_grid > GRID:
 		return false
 	var rows: PackedStringArray = parts[2].split("/", false)
-	if rows.size() != GRID:
+	if rows.size() != n_grid:
 		return false
-	var decoded: PackedByteArray = PackedByteArray()
-	decoded.resize(TOTAL)
-	for z in range(GRID):
+	var src: PackedByteArray = PackedByteArray()
+	src.resize(n_grid * n_grid)
+	for z in range(n_grid):
 		var row: String = rows[z]
 		var x: int = 0
 		var p: int = 0
@@ -1400,13 +1401,23 @@ func decode_ecosystem(code: String) -> bool:
 			if not num.is_valid_int():
 				return false
 			var n: int = int(num)
-			if n <= 0 or x + n > GRID:
+			if n <= 0 or x + n > n_grid:
 				return false
 			for k in range(n):
-				decoded[index_of(x + k, z)] = v
-			x += n
-		if x != GRID:
+				src[z * n_grid + x + k] = v
+				x += n
+		if x != n_grid:
 			return false
+	var decoded: PackedByteArray = PackedByteArray()
+	decoded.resize(TOTAL)
+	if n_grid == GRID:
+		decoded = src
+	else:
+		# legacy smaller world (e.g. 48×48): centre it in the 64×64 field
+		var off: int = (GRID - n_grid) / 2
+		for z in range(n_grid):
+			for x in range(n_grid):
+				decoded[index_of(x + off, z + off)] = src[z * n_grid + x]
 	cells = decoded
 	for i in range(TOTAL):
 		ages[i] = 1 if cells[i] != 0 else 0

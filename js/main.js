@@ -15,7 +15,7 @@ import { RenderPass } from '../lib/postprocessing/RenderPass.js';
 import { UnrealBloomPass } from '../lib/postprocessing/UnrealBloomPass.js';
 
 /* ─────────────────────────── CONFIG ─────────────────────────── */
-const GRID = 48, TOTAL = GRID * GRID, SPACING = 1.15;
+const GRID = 64, TOTAL = GRID * GRID, SPACING = 1.15;
 const MAX_AGE = 65, HISTORY_LIMIT = 1.0;
 const PALETTE = [new THREE.Color(0.15, 0.93, 1.0), new THREE.Color(1.0, 0.24, 0.72), new THREE.Color(0.54, 1.0, 0.38)];
 const ORANGE = new THREE.Color(1.0, 0.52, 0.26);
@@ -417,7 +417,7 @@ scene.fog = new THREE.FogExp2(0x05060f, 0.006);
 
 const camera = new THREE.PerspectiveCamera(78, 1, 0.1, 650);
 camera.rotation.order = 'YXZ';
-camera.position.set(0, 16, 32);
+camera.position.set(0, 20, 42);
 let yaw = 0, pitch = -0.30;
 
 /* Bloom post-processing (toggle B) */
@@ -453,7 +453,7 @@ floorMesh.position.y = -0.20; scene.add(floorMesh);
 }
 
 /* Pillars — unshaded (flat neon, mirrors Godot) */
-const pillarGeo = new THREE.BoxGeometry(0.91, 1, 0.91);
+const pillarGeo = new THREE.BoxGeometry(0.74, 1, 0.74);
 const pillarMat = new THREE.MeshBasicMaterial({});
 const pillarsMesh = new THREE.InstancedMesh(pillarGeo, pillarMat, TOTAL);
 pillarsMesh.instanceMatrix.setUsage(THREE.DynamicDrawUsage);
@@ -644,14 +644,14 @@ function seedWorld() {
   explosionsTotal = 0; lastExplosion = 'NONE';
   historyFrames = [];
   if (historyMode) { historyMode = false; running = wasRunningBeforeHistory; $('replay-bar').classList.add('hidden'); }
-  for (let k = 0; k < 17; k++) {
+  for (let k = 0; k < 16; k++) {
     const cx = rndRange(6, GRID - 7);
     const cz = rndRange(6, GRID - 7);
-    const radius = rndRange(4, 9);
+    const radius = rndRange(3, 8);
     const species = rndRange(1, 3);
     for (let z = Math.max(0, cz - radius); z <= Math.min(GRID - 1, cz + radius); z++)
       for (let x = Math.max(0, cx - radius); x <= Math.min(GRID - 1, cx + radius); x++) {
-        if (Math.hypot(x - cx, z - cz) < radius && rnd() < 0.37) cells[idxOf(x, z)] = species;
+        if (Math.hypot(x - cx, z - cz) < radius && rnd() < 0.34) cells[idxOf(x, z)] = species;
       }
   }
   generations = 0;
@@ -907,7 +907,7 @@ function updateVisuals(dt) {
     const mem = memoryEnabled ? history[i] : 0;
     const target = living !== 0
       ? (1.4 + 12.0 * Math.sqrt(ageFactor) + 11.0 * mem) * heightScale
-      : (8.0 * mem * heightScale);
+      : (6.5 * mem * heightScale);
     heights[i] += (target - heights[i]) * k;
     const h = Math.max(0.025, heights[i]);
     _p.set((x - (GRID - 1) / 2) * SPACING, h * 0.5, (z - (GRID - 1) / 2) * SPACING);
@@ -1177,8 +1177,8 @@ window.addEventListener('keydown', e => {
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
 function toggleOverview() {
   overview = !overview;
-  if (overview) { camera.position.set(0, 85, 60); yaw = 0; pitch = -0.95; }
-  else { camera.position.set(0, 16, 32); yaw = 0; pitch = -0.30; }
+  if (overview) { camera.position.set(0, 105, 72); yaw = 0; pitch = -0.95; }
+  else { camera.position.set(0, 20, 42); yaw = 0; pitch = -0.30; }
 }
 
 /* ─────────────────────────── UI ─────────────────────────────── */
@@ -1428,11 +1428,12 @@ function encodeEcosystem() {
 function decodeEcosystem(code) {
   const parts = code.trim().split(';');
   if (parts.length !== 3 || parts[0] !== 'EVO1') return null;
-  if (parseInt(parts[1], 10) !== GRID) return null;
+  const n = parseInt(parts[1], 10);
+  if (!n || n < 8 || n > GRID) return null; /* legacy smaller grids load centred */
   const rows = parts[2].split('/');
-  if (rows.length !== GRID) return null;
-  const out = new Uint8Array(TOTAL);
-  for (let z = 0; z < GRID; z++) {
+  if (rows.length !== n) return null;
+  const src = new Uint8Array(n * n);
+  for (let z = 0; z < n; z++) {
     let x = 0;
     const row = rows[z];
     for (let p = 0; p < row.length;) {
@@ -1441,12 +1442,16 @@ function decodeEcosystem(code) {
       p++;
       let num = '';
       while (p < row.length && row[p] >= '0' && row[p] <= '9') { num += row[p]; p++; }
-      const n = parseInt(num, 10);
-      if (!n || x + n > GRID) return null;
-      for (let k = 0; k < n; k++) out[idxOf(x++, z)] = v;
+      const run = parseInt(num, 10);
+      if (!run || x + run > n) return null;
+      for (let k = 0; k < run; k++) src[z * n + x++] = v;
     }
-    if (x !== GRID) return null;
+    if (x !== n) return null;
   }
+  if (n === GRID) return src;
+  const out = new Uint8Array(TOTAL);
+  const off = (GRID - n) >> 1;
+  for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) out[idxOf(x + off, z + off)] = src[z * n + x];
   return out;
 }
 function openSaveModal() { $('save-area').value = encodeEcosystem(); $('save-modal').classList.remove('hidden'); $('save-area').select(); }
