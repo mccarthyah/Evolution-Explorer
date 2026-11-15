@@ -191,11 +191,25 @@ var pilot: Dictionary = {
 	"xp": 0, "level": 1, "sp": 0, "area_brush": false,
 	"up": {"vigor": 0, "fertility": 0, "volatility": 0, "magnetism": 0},
 	"tools": ["rpento", "glider", "pulsar", "rain", "stasis", "gun"],
+	"rec": {"biggestBlast": 0, "tallestTower": 0, "bestDaily": 0, "firesOut": 0},
+	"streak": {"last": "", "count": 0},
 }
 var tool_by_id: Dictionary = {}
 var selected_tool_idx: int = 0
 var harvesters: Array[Dictionary] = []
 var upgrade_label: Label
+
+# ── v7 Wildlands: weather, events, ecology ──
+const DOMINATOR: Array = [2, 3, 1]  # species DOMINATOR[s-1] assimilates species s
+const AURORA_BG := Color(0.012, 0.095, 0.05)
+var harmony: PackedByteArray = PackedByteArray()
+var event_countdown: int = 60
+var pollen_gens: int = 0
+var aurora_ttl: float = 0.0
+var fires: Dictionary = {}
+var meteor: Dictionary = {}
+var fires_out: int = 0
+var last_record_toast_ms: int = 0
 
 var mesh_instance: MultiMeshInstance3D
 var multimesh: MultiMesh
@@ -209,6 +223,7 @@ func _ready() -> void:
 	rng.randomize()
 	cells.resize(TOTAL)
 	next_cells.resize(TOTAL)
+	harmony.resize(TOTAL)
 	ages.resize(TOTAL)
 	history.resize(TOTAL)
 	heights.resize(TOTAL)
@@ -299,6 +314,7 @@ func build_world() -> void:
 	hint.text += "\nInstability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON"
 	hint.text += "\nK minimap  |  H replay (, / . scrub)  |  D daily challenge"
 	hint.text += "\nU genetics lab  |  Q/E select/place seeds  |  Y auto-harvester 40⚡"
+	hint.text += "\n🌍 Weather strikes: ☄️ meteors · 🔥 wildfire · 🌌 aurora ×2XP · 🌸 pollen — species RPS ecology"
 	toast_label = Label.new()
 	toast_label.position = Vector2(420.0, 92.0)
 	toast_label.add_theme_font_size_override("font_size", 19)
@@ -363,6 +379,15 @@ func seed_world() -> void:
 				if Vector2(x - cx, z - cz).length() < float(radius) and rnd() < 0.37:
 					cells[index_of(x, z)] = species
 	generations = 0
+	event_countdown = 55 + rnd_range(0, 24)
+	pollen_gens = 0
+	aurora_ttl = 0.0
+	fires.clear()
+	if not meteor.is_empty():
+		var mnode: MeshInstance3D = meteor["node"] as MeshInstance3D
+		if mnode != null and is_instance_valid(mnode):
+			mnode.queue_free()
+		meteor = {}
 	refresh_population()
 
 func refresh_population() -> void:
@@ -401,6 +426,15 @@ func step_simulation() -> void:
 				next_cells[i] = winner + 1
 			else:
 				next_cells[i] = 0
+			# v7 ecology: harmony pauses aging; 3 dominant rivals assimilate a survivor.
+			if int(next_cells[i]) != 0 and votes[0] > 0 and votes[1] > 0 and votes[2] > 0:
+				harmony[i] = 1
+			else:
+				harmony[i] = 0
+				if living != 0 and int(next_cells[i]) != 0:
+					var dom: int = DOMINATOR[living - 1]
+					if votes[dom - 1] >= 3:
+						next_cells[i] = dom
 	for i in range(TOTAL):
 		var old: int = int(cells[i])
 		var current: int = int(next_cells[i])
@@ -408,16 +442,26 @@ func step_simulation() -> void:
 		var frozen: bool = in_stasis(i % GRID, i / GRID)
 		if current != 0:
 			if old != 0:
-				ages[i] = ages[i] if frozen else mini(MAX_AGE, ages[i] + 1)
+				ages[i] = ages[i] if frozen or harmony[i] != 0 else mini(MAX_AGE, ages[i] + 1)
 			else:
 				ages[i] = 1
 			if not frozen:
 				history[i] = minf(HISTORY_LIMIT, history[i] + memory_gain())
+			if ages[i] > int(pilot["rec"]["tallestTower"]):
+				pilot["rec"]["tallestTower"] = ages[i]
 		else:
 			ages[i] = 0
 			if not frozen:
 				history[i] = maxf(0.0, history[i] - 0.012)
 	generations += 1
+	# v7 weather & events (seeded rnd → daily runs share the same weather).
+	if pollen_gens > 0:
+		pollen_gens -= 1
+	if not fires.is_empty():
+		spread_fire()
+	event_countdown -= 1
+	if event_countdown <= 0 and generations > 40:
+		trigger_random_event()
 	update_instability()
 	update_stasis()
 	refresh_population()
@@ -560,16 +604,16 @@ func find_oscillators() -> void:
 			updated.erase(key)
 	oscillator_tracks = updated
 
-func detonate(center: Vector2i) -> void:
+func detonate(center: Vector2i, radius: int = EXPLOSION_RADIUS, orb_n: int = 0, debris_n: int = 0) -> void:
 	var source: int = index_of(center.x, center.y)
 	var species: int = int(cells[source])
 	if species == 0:
-		species = rng.randi_range(1, 3)
+		species = rnd_range(1, 3)
 	var destroyed: int = 0
-	for z in range(maxi(0, center.y - EXPLOSION_RADIUS), mini(GRID, center.y + EXPLOSION_RADIUS + 1)):
-		for x in range(maxi(0, center.x - EXPLOSION_RADIUS), mini(GRID, center.x + EXPLOSION_RADIUS + 1)):
+	for z in range(maxi(0, center.y - radius), mini(GRID, center.y + radius + 1)):
+		for x in range(maxi(0, center.x - radius), mini(GRID, center.x + radius + 1)):
 			var dist: float = Vector2(x - center.x, z - center.y).length()
-			if dist > float(EXPLOSION_RADIUS):
+			if dist > float(radius):
 				continue
 			var i: int = index_of(x, z)
 			if cells[i] != 0:
@@ -585,9 +629,10 @@ func detonate(center: Vector2i) -> void:
 	# Scatter viable fragments outside the cleared crater.
 	# Small clusters and gliders seed new activity rather than dying instantly.
 	var glider: Array[Vector2i] = [Vector2i(1, 0), Vector2i(2, 1), Vector2i(0, 2), Vector2i(1, 2), Vector2i(2, 2)]
-	for seed in range(MAX_DEBRIS_SEEDS):
+	var debris_count: int = debris_n if debris_n > 0 else MAX_DEBRIS_SEEDS
+	for seed in range(debris_count):
 		var angle: float = rnd() * TAU
-		var distance: float = rnd() * (float(EXPLOSION_RADIUS) * 2.5 - float(EXPLOSION_RADIUS) - 1.0) + float(EXPLOSION_RADIUS) + 1.0
+		var distance: float = rnd() * (float(radius) * 2.5 - float(radius) - 1.0) + float(radius) + 1.0
 		var px: int = center.x + roundi(cos(angle) * distance)
 		var pz: int = center.y + roundi(sin(angle) * distance)
 		var kind: int = seed % 3
@@ -609,11 +654,18 @@ func detonate(center: Vector2i) -> void:
 	var blast_node := _make_blast_node(blast_pos)
 	blasts.append({"x": center.x, "z": center.y, "ttl": 0.65, "node": blast_node})
 	_spawn_burst(blast_pos, Color(1.0, 0.55, 0.15), 26)
-	spawn_orbs(center.x, center.y, orb_count())
+	spawn_orbs(center.x, center.y, orb_n if orb_n > 0 else orb_count())
 	shake = clampf(16.0 / (1.0 + blast_pos.distance_to(camera.global_position) * 0.14), 0.15, 1.1)
 	explosions_total += 1
 	add_xp(3)
 	last_explosion = "(%d,%d) cleared %d" % [center.x, center.y, destroyed]
+	if destroyed > int(pilot["rec"]["biggestBlast"]):
+		pilot["rec"]["biggestBlast"] = destroyed
+		save_pilot()
+		var now_ms: int = Time.get_ticks_msec()
+		if now_ms - last_record_toast_ms > 6000 and destroyed >= 10:
+			last_record_toast_ms = now_ms
+			show_banner("🏆 NEW RECORD — biggest blast cleared %d!" % destroyed, Color(1.0, 0.85, 0.3))
 	pattern_snapshots.clear()
 	oscillator_tracks.clear()
 	print("EVOLUTION: explosion ", last_explosion, " at generation ", generations)
@@ -674,6 +726,11 @@ func _process(delta: float) -> void:
 	if world_env != null:
 		world_env.background_color = BASE_BG * world_brightness
 		world_env.ambient_light_energy = 0.7 * world_brightness
+	if aurora_ttl > 0.0:
+		aurora_ttl -= delta * 1000.0
+		if world_env != null:
+			world_env.background_color = world_env.background_color.lerp(AURORA_BG, 0.55)
+	update_meteor(delta)
 	if sun_light != null:
 		sun_light.light_energy = 0.95 * world_brightness
 	if floor_material != null:
@@ -733,6 +790,15 @@ func _process(delta: float) -> void:
 	var filled_xp: int = clampi(int(float(pilot["xp"]) / float(next_xp) * 10.0), 0, 10)
 	var xp_bar: String = "▓".repeat(filled_xp) + "░".repeat(10 - filled_xp)
 	hud.text += "\nLV %d %s %d/%d XP  ·  SP %d  ·  🎣 %d/%d" % [int(pilot["level"]), xp_bar, int(pilot["xp"]), next_xp, int(pilot["sp"]), harvesters.size(), HARVESTER_MAX]
+	var fx: Array = []
+	if aurora_ttl > 0.0:
+		fx.append("🌌 Aurora ×2XP %ds" % int(ceil(aurora_ttl / 1000.0)))
+	if pollen_gens > 0:
+		fx.append("🌸 Pollen %dgen" % pollen_gens)
+	if not fires.is_empty():
+		fx.append("🔥 Wildfire %d cells" % fires.size())
+	if not fx.is_empty():
+		hud.text += "\n" + "  ·  ".join(fx)
 
 func update_visuals(delta: float) -> void:
 	if history_mode:
@@ -774,6 +840,8 @@ func update_visuals(delta: float) -> void:
 				tint = tint.lerp(Color(1.0, 0.16, 0.04), 0.65 + 0.35 * sin(float(generations) * 2.0))
 		else:
 			tint = Color(0.06, 0.14, 0.26).lerp(Color(0.19, 0.26, 0.42), terrain_memory)
+		if fires.has(i):
+			tint = Color(1.0, 0.42 + 0.3 * sin(float(generations) * 3.0 + float(i)), 0.06)
 		tint = Color(tint.r * world_brightness, tint.g * world_brightness, tint.b * world_brightness)
 		multimesh.set_instance_color(i, tint)
 
@@ -1018,10 +1086,13 @@ func use_tool(id: String) -> void:
 			return
 		make_stasis_bubble(target)
 	elif kind == "rain":
+		douse_fires_at(target.x, target.y, 6.0)
 		seed_rain_at(target, 6.0, 40)
 	elif kind == "monsoon":
+		douse_fires_at(target.x, target.y, 13.0)
 		seed_rain_at(target, 13.0, 90)
 	elif kind == "bigbang":
+		douse_fires_at(target.x, target.y, 8.0)
 		place_pattern(PULSAR_ROWS, Vector2i(target.x - 6, target.y - 6), brush_species)
 		place_pattern(ACORN_ROWS, Vector2i(target.x - 12, target.y - 12), 1 + (brush_species % 3))
 		place_pattern(GLIDER_ROWS, Vector2i(target.x + 6, target.y + 2), brush_species)
@@ -1053,6 +1124,7 @@ func make_stasis_bubble(target: Vector2i) -> void:
 	node.position = pos
 	add_child(node)
 	stasis_bubbles.append({"x": target.x, "z": target.y, "gens": STASIS_GENS, "node": node})
+	douse_fires_at(target.x, target.y, float(STASIS_RADIUS))
 
 func in_stasis(x: int, z: int) -> bool:
 	for bubble in stasis_bubbles:
@@ -1430,7 +1502,18 @@ func score_daily() -> void:
 	if score > best:
 		config.set_value("daily", Time.get_date_string_from_system(), score)
 		config.save("user://daily.cfg")
-	show_banner("🏁 DAILY SCORE: Alive %d · ⚡%d · 🔬%d · 💥%d → %d (best %d)" % [population, biomass, discoveries.size(), explosions_total, score, maxi(best, score)], Color(1.0, 0.85, 0.3))
+	# v7 streak: consecutive days scored → +1 SP every 3 days (same-day reruns don't re-award).
+	var today: String = Time.get_date_string_from_system()
+	if String(pilot["streak"]["last"]) != today:
+		var yesterday: String = Time.get_date_string_from_unix_time(int(Time.get_unix_time_from_system()) - 86400)
+		pilot["streak"]["count"] = 1 if String(pilot["streak"]["last"]) != yesterday else int(pilot["streak"]["count"]) + 1
+		pilot["streak"]["last"] = today
+		if int(pilot["streak"]["count"]) % 3 == 0:
+			pilot["sp"] = int(pilot["sp"]) + 1
+	if score > int(pilot["rec"]["bestDaily"]):
+		pilot["rec"]["bestDaily"] = score
+	save_pilot()
+	show_banner("🏁 DAILY SCORE: Alive %d · ⚡%d · 🔬%d · 💥%d → %d (best %d) · 🔥 streak %d" % [population, biomass, discoveries.size(), explosions_total, score, maxi(best, score), int(pilot["streak"]["count"])], Color(1.0, 0.85, 0.3))
 
 # ── v5: minimap ──
 func build_minimap(canvas: CanvasLayer) -> void:
@@ -1457,6 +1540,9 @@ func _draw_minimap() -> void:
 				minimap.draw_rect(Rect2(Vector2(float(x) * s, float(z) * s), cell_size), PALETTE[v - 1])
 			elif history[i] > 0.05:
 				minimap.draw_rect(Rect2(Vector2(float(x) * s, float(z) * s), cell_size), Color(0.1, 0.16, 0.28, history[i] * 0.55))
+	if not history_mode:
+		for i in fires.keys():
+			minimap.draw_rect(Rect2(Vector2(float(i % GRID) * s, float(i / GRID) * s), cell_size), Color(1.0, 0.54, 0.16))
 	for bubble in stasis_bubbles:
 		var c: Vector2 = Vector2((float(bubble["x"]) + 0.5) * s, (float(bubble["z"]) + 0.5) * s)
 		minimap.draw_arc(c, float(STASIS_RADIUS) * s, 0.0, TAU, 24, Color(0.3, 0.9, 1.0, 0.7), 1.5)
@@ -1485,6 +1571,15 @@ func load_pilot() -> void:
 	for id in saved_tools:
 		if not (pilot["tools"] as Array).has(id) and tool_by_id.has(id):
 			(pilot["tools"] as Array).append(id)
+	pilot["rec"] = {
+		"biggestBlast": int(config.get_value("rec", "biggest_blast", 0)),
+		"tallestTower": int(config.get_value("rec", "tallest_tower", 0)),
+		"bestDaily": int(config.get_value("rec", "best_daily", 0)),
+		"firesOut": int(config.get_value("rec", "fires_out", 0)),
+	}
+	var streak_last: String = String(config.get_value("streak", "last", ""))
+	if streak_last != "":
+		pilot["streak"] = {"last": streak_last, "count": int(config.get_value("streak", "count", 0))}
 
 func save_pilot() -> void:
 	var config: ConfigFile = ConfigFile.new()
@@ -1495,12 +1590,20 @@ func save_pilot() -> void:
 	for track in ["vigor", "fertility", "volatility", "magnetism"]:
 		config.set_value("up", track, pilot["up"][track])
 	config.set_value("tools", "ids", pilot["tools"])
+	config.set_value("rec", "biggest_blast", pilot["rec"]["biggestBlast"])
+	config.set_value("rec", "tallest_tower", pilot["rec"]["tallestTower"])
+	config.set_value("rec", "best_daily", pilot["rec"]["bestDaily"])
+	config.set_value("rec", "fires_out", pilot["rec"]["firesOut"])
+	config.set_value("streak", "last", pilot["streak"]["last"])
+	config.set_value("streak", "count", pilot["streak"]["count"])
 	config.save("user://pilot.cfg")
 
 func xp_for_next() -> int:
 	return 50 + (int(pilot["level"]) - 1) * 25
 
 func add_xp(n: int) -> void:
+	if aurora_ttl > 0.0:
+		n *= 2
 	pilot["xp"] = int(pilot["xp"]) + n
 	var leveled: bool = false
 	while int(pilot["xp"]) >= xp_for_next():
@@ -1535,7 +1638,7 @@ func tower_lifespan() -> int:
 	return TOWER_LIFESPAN + 7 * int(pilot["up"]["vigor"])
 
 func memory_gain() -> float:
-	return 0.065 * (1.0 + 0.5 * float(pilot["up"]["fertility"]))
+	return 0.065 * (1.0 + 0.5 * float(pilot["up"]["fertility"])) * (2.0 if pollen_gens > 0 else 1.0)
 
 func orb_count() -> int:
 	return 3 + int(pilot["up"]["volatility"])
@@ -1549,12 +1652,13 @@ func collect_radius() -> float:
 func refresh_upgrade_label() -> void:
 	if upgrade_label == null:
 		return
-	var t: String = "🧬 GENETICS LAB — SP %d\n\n" % int(pilot["sp"])
+	var t: String = "🧬 GENETICS LAB — %s  ·  SP %d\n\n" % [rank_title(), int(pilot["sp"])]
 	t += "1 Vigor      [%s]  tower lifespan %d\n" % [pips("vigor"), tower_lifespan()]
 	t += "2 Fertility  [%s]  memory gain +%.0f%%\n" % [pips("fertility"), 50.0 * float(pilot["up"]["fertility"])]
 	t += "3 Volatility [%s]  %d orbs per blast\n" % [pips("volatility"), orb_count()]
 	t += "4 Magnetism  [%s]  orbs %d⚡, radius %.1f\n\n" % [pips("magnetism"), orb_value(), collect_radius()]
 	t += "U close  ·  1-4 spend"
+	t += "\n\n🏆 Records — blast %d · tower %d · daily %d · doused %d · streak %d🔥" % [int(pilot["rec"]["biggestBlast"]), int(pilot["rec"]["tallestTower"]), int(pilot["rec"]["bestDaily"]), int(pilot["rec"]["firesOut"]), int(pilot["streak"]["count"])]
 	upgrade_label.text = t
 
 func pips(track: String) -> String:
@@ -1603,3 +1707,139 @@ func place_harvester() -> void:
 	harvesters.append({"node": node, "phase": rng.randf_range(0.0, TAU)})
 	biomass -= HARVESTER_COST
 	show_banner("🎣 Auto-harvester deployed (-%d ⚡)" % HARVESTER_COST, Color(0.65, 1.0, 0.85))
+
+# ── v7 Wildlands: weather events, wildfire, ecology helpers ──
+func rank_title() -> String:
+	var l: int = int(pilot["level"])
+	if l >= 12:
+		return "Worldshaper"
+	if l >= 9:
+		return "Master Gardener"
+	if l >= 7:
+		return "Landscape Architect"
+	if l >= 5:
+		return "Groundskeeper"
+	if l >= 3:
+		return "Seed Sower"
+	return "Sprout Tender"
+
+func trigger_random_event() -> void:
+	var roll: float = rnd()
+	if roll < 0.30:
+		trigger_meteor()
+	elif roll < 0.60:
+		trigger_wildfire()
+	elif roll < 0.80:
+		aurora_ttl = 60000.0
+		show_banner("🌌 AURORA — double XP for 60 seconds!", Color(0.55, 0.95, 0.75))
+	else:
+		pollen_gens = 60
+		show_banner("🌸 POLLEN BLOOM — terrain memory surges for 60 generations", Color(0.65, 1.0, 0.85))
+	event_countdown = 90 + rnd_range(0, 70)
+
+func trigger_meteor() -> void:
+	var cx: int = 4 + rnd_range(0, GRID - 9)
+	var cz: int = 4 + rnd_range(0, GRID - 9)
+	var to: Vector3 = Vector3((float(cx) - float(GRID - 1) * 0.5) * SPACING, 1.0, (float(cz) - float(GRID - 1) * 0.5) * SPACING)
+	var from: Vector3 = Vector3(to.x + 34.0, 70.0, to.z - 28.0)
+	var sphere := SphereMesh.new()
+	sphere.radius = 0.9
+	sphere.height = 1.8
+	sphere.radial_segments = 16
+	sphere.rings = 8
+	var mat := StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(1.0, 0.63, 0.24)
+	sphere.material = mat
+	var node := MeshInstance3D.new()
+	node.mesh = sphere
+	node.position = from
+	add_child(node)
+	meteor = {"node": node, "from": from, "to": to, "t": 0.0, "dur": 1.5, "cx": cx, "cz": cz}
+	show_banner("☄️ METEOR INBOUND — impact imminent!", Color(1.0, 0.85, 0.3))
+
+func update_meteor(delta: float) -> void:
+	if meteor.is_empty():
+		return
+	meteor["t"] = float(meteor["t"]) + delta
+	var p: float = minf(1.0, float(meteor["t"]) / float(meteor["dur"]))
+	var node: MeshInstance3D = meteor["node"] as MeshInstance3D
+	if node != null and is_instance_valid(node):
+		node.position = (meteor["from"] as Vector3).lerp(meteor["to"] as Vector3, p * p)
+		if rng.randf() < 0.35:
+			_spawn_burst(node.position, Color(1.0, 0.6, 0.2), 3)
+	if p >= 1.0:
+		var cx: int = int(meteor["cx"])
+		var cz: int = int(meteor["cz"])
+		if node != null and is_instance_valid(node):
+			node.queue_free()
+		meteor = {}
+		detonate(Vector2i(cx, cz), 5, 10, 16)
+		shake = 1.25
+		add_xp(4)
+		show_banner("☄️ METEOR IMPACT — big crater, fresh debris, 10 orbs!", Color(1.0, 0.85, 0.3))
+
+func trigger_wildfire() -> void:
+	var cands: Array = []
+	for i in range(TOTAL):
+		if fires.has(i):
+			continue
+		if cells[i] != 0 and ages[i] >= tower_lifespan() * 0.5:
+			cands.append(i)
+		elif cells[i] == 0 and history[i] > 1.2:
+			cands.append(i)
+	if cands.is_empty():
+		pollen_gens = 60
+		show_banner("🌸 POLLEN BLOOM — terrain memory surges for 60 generations", Color(0.65, 1.0, 0.85))
+		return
+	var n: int = mini(3, 1 + rnd_range(0, 2))
+	for k in range(n):
+		var i: int = cands[rnd_range(0, cands.size() - 1)]
+		if not in_stasis(i % GRID, i / GRID):
+			fires[i] = true
+	show_banner("🔥 WILDFIRE — it spreads through old growth! Douse: rain tools or stasis", Color(1.0, 0.55, 0.6))
+
+func spread_fire() -> void:
+	var next: Dictionary = {}
+	for i in fires.keys():
+		var x: int = i % GRID
+		var z: int = i / GRID
+		if cells[i] != 0:
+			cells[i] = 0
+			ages[i] = 0
+			warning_timers[i] = 0
+		history[i] = maxf(0.0, history[i] - 0.35)
+		for dz in range(-1, 2):
+			for dx in range(-1, 2):
+				if dx == 0 and dz == 0:
+					continue
+				var nx: int = x + dx
+				var nz: int = z + dz
+				if nx < 0 or nx >= GRID or nz < 0 or nz >= GRID:
+					continue
+				var j: int = index_of(nx, nz)
+				if fires.has(j) or next.has(j) or in_stasis(nx, nz):
+					continue
+				if cells[j] != 0 and rnd() < 0.65:
+					next[j] = true
+				elif cells[j] == 0 and history[j] > 1.2 and rnd() < 0.3:
+					next[j] = true
+	fires = next
+
+func douse_fires_at(cx: int, cz: int, radius: float) -> int:
+	if fires.is_empty():
+		return 0
+	var doused: int = 0
+	for i in fires.keys():
+		var dx: float = float(i % GRID) - float(cx)
+		var dz: float = float(i / GRID) - float(cz)
+		if dx * dx + dz * dz <= radius * radius:
+			fires.erase(i)
+			doused += 1
+	if doused > 0:
+		fires_out += doused
+		pilot["rec"]["firesOut"] = int(pilot["rec"]["firesOut"]) + doused
+		add_xp(2 * doused)
+		save_pilot()
+		show_banner("💧 Doused %d fire%s (+%d XP)" % [doused, "s" if doused > 1 else "", 2 * doused], Color(0.65, 1.0, 0.85))
+	return doused

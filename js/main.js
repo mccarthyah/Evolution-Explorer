@@ -184,6 +184,8 @@ let pilot = {
   xp: 0, level: 1, sp: 0, areaBrush: false,
   up: { vigor: 0, fertility: 0, volatility: 0, magnetism: 0 },
   tools: ['rpento', 'glider', 'pulsar', 'rain', 'stasis', 'gun'],
+  rec: { biggestBlast: 0, tallestTower: 0, bestDaily: 0, firesOut: 0 },
+  streak: { last: '', count: 0 },
 };
 let selectedToolIdx = 0;
 function loadPilot() {
@@ -199,6 +201,8 @@ function loadPilot() {
       pilot.tools = [...new Set([...base, ...d.tools.filter(id => TOOL_BY_ID[id])])];
     }
     pilot.areaBrush = !!d.areaBrush;
+    if (d.rec) for (const k of Object.keys(pilot.rec)) pilot.rec[k] = d.rec[k] | 0;
+    if (d.streak) pilot.streak = { last: String(d.streak.last || ''), count: d.streak.count | 0 };
   } catch (e) { }
 }
 function savePilot() {
@@ -209,11 +213,14 @@ function resetPilot() {
     xp: 0, level: 1, sp: 0, areaBrush: false,
     up: { vigor: 0, fertility: 0, volatility: 0, magnetism: 0 },
     tools: ['rpento', 'glider', 'pulsar', 'rain', 'stasis', 'gun'],
+    rec: { biggestBlast: 0, tallestTower: 0, bestDaily: 0, firesOut: 0 },
+    streak: { last: '', count: 0 },
   };
   savePilot();
 }
 function xpForNext() { return 50 + (pilot.level - 1) * 25; }
 function addXP(n) {
+  if (auroraTtl > 0) n *= 2;
   pilot.xp += n;
   let leveled = false;
   while (pilot.xp >= xpForNext()) {
@@ -253,11 +260,119 @@ function checkDiscoverUnlock(name) {
 }
 /* Genetics derived values */
 const towerLifespan = () => TOWER_LIFESPAN + 7 * pilot.up.vigor;
-const memoryGain = () => 0.065 * (1 + 0.5 * pilot.up.fertility);
+const memoryGain = () => 0.065 * (1 + 0.5 * pilot.up.fertility) * (pollenGens > 0 ? 2 : 1);
 const orbCount = () => 3 + pilot.up.volatility;
 const orbValue = () => ORB_VALUE + pilot.up.magnetism;
 const collectRadius = () => 2.6 + 0.8 * pilot.up.magnetism;
 function unlockedTools() { return TOOL_CATALOG.filter(t => pilot.tools.includes(t.id)); }
+
+/* ── v7 Wildlands: weather, events, ecology ──
+   Species ecology (B3/S23 untouched — species layer gets interactions):
+   • Rock-paper-scissors pressure: a surviving tower with 3 neighbours of the
+     species that dominates it is assimilated (2 beats 1, 3 beats 2, 1 beats 3).
+   • Symbiotic harmony: a cell whose neighbourhood holds all 3 species stops aging.
+   Weather events (every ~90-160 generations after gen 40, seeded rnd → daily runs
+   share the same weather): meteor, wildfire, aurora (×2 XP), pollen bloom. */
+const DOMINATOR = [2, 3, 1];              // DOMINATOR[s-1] beats species s
+const harmony = new Uint8Array(TOTAL);
+let eventCountdown = 60;
+let pollenGens = 0;                       // fertility surge, generations remaining
+let auroraTtl = 0;                        // ×2 XP window, ms remaining
+const fires = new Set();                  // indices burning this generation
+let meteor = null;
+let firesOut = 0, lastRecordToastAt = 0;
+const AURORA_BG = new THREE.Color(0.012, 0.095, 0.05);
+function rankTitle() {
+  const l = pilot.level;
+  return l >= 12 ? 'Worldshaper' : l >= 9 ? 'Master Gardener' : l >= 7 ? 'Landscape Architect'
+    : l >= 5 ? 'Groundskeeper' : l >= 3 ? 'Seed Sower' : 'Sprout Tender';
+}
+function triggerRandomEvent() {
+  const roll = rnd();
+  if (roll < 0.30) triggerMeteor();
+  else if (roll < 0.60) triggerWildfire();
+  else if (roll < 0.80) { auroraTtl = 60000; toast('🌌 <b>AURORA</b> — double XP for 60 seconds!', 4200, 'gold'); }
+  else { pollenGens = 60; toast('🌸 <b>POLLEN BLOOM</b> — terrain memory surges for 60 generations', 4200, 'gold'); }
+  eventCountdown = 90 + Math.floor(rnd() * 70);
+}
+function triggerMeteor() {
+  const cx = 4 + Math.floor(rnd() * (GRID - 8));
+  const cz = 4 + Math.floor(rnd() * (GRID - 8));
+  const w = cellWorld(cx, cz);
+  const mesh = new THREE.Mesh(new THREE.SphereGeometry(0.9, 12, 8), new THREE.MeshBasicMaterial({ color: 0xffa03c }));
+  const from = new THREE.Vector3(w.x + 34, 70, w.z - 28);
+  mesh.position.copy(from);
+  scene.add(mesh);
+  meteor = { mesh, from, to: new THREE.Vector3(w.x, 1, w.z), t: 0, dur: 1.5, cx, cz };
+  AudioSys.pop();
+  toast('☄️ <b>METEOR INBOUND</b> — impact imminent!', 4200, 'gold');
+}
+function updateMeteor(dt) {
+  if (!meteor) return;
+  meteor.t += dt;
+  const p = Math.min(1, meteor.t / meteor.dur);
+  meteor.mesh.position.lerpVectors(meteor.from, meteor.to, p * p);
+  if (Math.random() < 0.7) spawnParticles(meteor.mesh.position.x, meteor.mesh.position.y, meteor.mesh.position.z, new THREE.Color(1.0, 0.6, 0.2), 2, 2, 0.5);
+  if (p >= 1) {
+    const { cx, cz } = meteor;
+    scene.remove(meteor.mesh); meteor.mesh.material.dispose(); meteor.mesh.geometry.dispose();
+    meteor = null;
+    detonate(cx, cz, 5, 10, 16);
+    const w = cellWorld(cx, cz);
+    spawnParticles(w.x, 4, w.z, new THREE.Color(1.0, 0.75, 0.3), 40, 11, 1.1);
+    shake = 1.25;
+    addXP(4);
+    toast('☄️ <b>METEOR IMPACT</b> — big crater, fresh debris, 10 orbs!', 4200, 'gold');
+  }
+}
+function triggerWildfire() {
+  const cands = [];
+  for (let i = 0; i < TOTAL; i++) {
+    if (fires.has(i)) continue;
+    if (cells[i] !== 0 && ages[i] >= towerLifespan() * 0.5) cands.push(i);
+    else if (cells[i] === 0 && history[i] > 1.2) cands.push(i);
+  }
+  if (!cands.length) { pollenGens = 60; toast('🌸 <b>POLLEN BLOOM</b> — terrain memory surges for 60 generations', 4200, 'gold'); return; }
+  const n = Math.min(3, 1 + Math.floor(rnd() * 3));
+  for (let k = 0; k < n; k++) {
+    const i = cands[Math.floor(rnd() * cands.length)];
+    if (!inStasis(i % GRID, Math.floor(i / GRID))) fires.add(i);
+  }
+  AudioSys.err();
+  toast('🔥 <b>WILDFIRE</b> — it spreads through old growth!<br>Douse it: Seed Rain / Monsoon / Big Bang, or freeze it with Stasis', 5600, 'err');
+}
+function spreadFire() {
+  const next = new Set();
+  for (const i of fires) {
+    const x = i % GRID, z = Math.floor(i / GRID);
+    if (cells[i] !== 0) { cells[i] = 0; ages[i] = 0; warnings[i] = 0; }
+    history[i] = Math.max(0, history[i] - 0.35);
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      if (!dx && !dz) continue;
+      const nx = x + dx, nz = z + dz;
+      if (nx < 0 || nx >= GRID || nz < 0 || nz >= GRID) continue;
+      const j = idxOf(nx, nz);
+      if (fires.has(j) || next.has(j) || inStasis(nx, nz)) continue;
+      if (cells[j] !== 0 && rnd() < 0.65) next.add(j);
+      else if (cells[j] === 0 && history[j] > 1.2 && rnd() < 0.3) next.add(j);
+    }
+  }
+  fires.clear();
+  for (const j of next) fires.add(j);
+}
+function douseFires(check) {
+  if (!fires.size) return 0;
+  let doused = 0;
+  for (const i of [...fires]) if (check(i)) { fires.delete(i); doused++; }
+  if (doused) {
+    firesOut += doused; pilot.rec.firesOut += doused;
+    addXP(2 * doused);
+    savePilot();
+    AudioSys.blip();
+    toast(`💧 Doused ${doused} fire${doused > 1 ? 's' : ''} (+${2 * doused} XP)`, 2400, 'gold');
+  }
+  return doused;
+}
 
 /* ─────────────────────────── AUDIO (light) ──────────────────── */
 const AudioSys = {
@@ -463,6 +578,10 @@ function makeStasisBubble(x, z) {
   m.position.set(w.x, 2.5, w.z);
   scene.add(m);
   stasisBubbles.push({ x, z, gens: STASIS_GENS, mesh: m });
+  douseFires(i => {
+    const dx = (i % GRID) - x, dz = Math.floor(i / GRID) - z;
+    return dx * dx + dz * dz <= STASIS_RADIUS * STASIS_RADIUS;
+  });
 }
 function inStasis(x, z) {
   for (const b of stasisBubbles) {
@@ -536,6 +655,9 @@ function seedWorld() {
       }
   }
   generations = 0;
+  eventCountdown = 55 + Math.floor(rnd() * 25);
+  pollenGens = 0; auroraTtl = 0; fires.clear();
+  if (meteor) { scene.remove(meteor.mesh); meteor.mesh.material.dispose(); meteor.mesh.geometry.dispose(); meteor = null; }
   refreshPopulation();
 }
 function stepSimulation() {
@@ -556,20 +678,35 @@ function stepSimulation() {
       for (let s = 1; s < 3; s++) if (votes[s] > votes[winner]) winner = s;
       nextCells[i] = winner + 1;
     } else nextCells[i] = 0;
+    /* v7 ecology: harmony pauses aging; 3 dominant rivals assimilate a survivor */
+    if (nextCells[i] !== 0 && votes[0] > 0 && votes[1] > 0 && votes[2] > 0) {
+      harmony[i] = 1;
+    } else {
+      harmony[i] = 0;
+      if (living !== 0 && nextCells[i] !== 0) {
+        const dom = DOMINATOR[living - 1];
+        if (votes[dom - 1] >= 3) nextCells[i] = dom;
+      }
+    }
   }
   for (let i = 0; i < TOTAL; i++) {
     const old = cells[i], current = nextCells[i];
     cells[i] = current;
     const frozen = inStasis(i % GRID, Math.floor(i / GRID));
     if (current !== 0) {
-      ages[i] = old !== 0 ? (frozen ? ages[i] : Math.min(MAX_AGE, ages[i] + 1)) : 1;
+      ages[i] = old !== 0 ? ((frozen || harmony[i]) ? ages[i] : Math.min(MAX_AGE, ages[i] + 1)) : 1;
       if (!frozen) history[i] = Math.min(HISTORY_LIMIT, history[i] + memoryGain());
+      if (ages[i] > pilot.rec.tallestTower) pilot.rec.tallestTower = ages[i];
     } else {
       ages[i] = 0;
       if (!frozen) history[i] = Math.max(0, history[i] - 0.012);
     }
   }
   generations++;
+  /* v7 weather & events (seeded rnd → daily runs share the same weather) */
+  if (pollenGens > 0) pollenGens--;
+  if (fires.size > 0) spreadFire();
+  if (--eventCountdown <= 0 && generations > 40) triggerRandomEvent();
   updateInstability();
   updateStasis();
   refreshPopulation();
@@ -681,14 +818,14 @@ function findOscillators() {
   }
   tracks = updated;
 }
-function detonate(cx, cz) {
+function detonate(cx, cz, radius = EXPLOSION_RADIUS, orbN = null, debrisN = null) {
   const source = idxOf(cx, cz);
   let species = cells[source];
-  if (species === 0) species = 1 + Math.floor(Math.random() * 3);
+  if (species === 0) species = 1 + Math.floor(rnd() * 3);
   let destroyed = 0;
-  for (let z = Math.max(0, cz - EXPLOSION_RADIUS); z <= Math.min(GRID - 1, cz + EXPLOSION_RADIUS); z++)
-    for (let x = Math.max(0, cx - EXPLOSION_RADIUS); x <= Math.min(GRID - 1, cx + EXPLOSION_RADIUS); x++) {
-      if (Math.hypot(x - cx, z - cz) > EXPLOSION_RADIUS) continue;
+  for (let z = Math.max(0, cz - radius); z <= Math.min(GRID - 1, cz + radius); z++)
+    for (let x = Math.max(0, cx - radius); x <= Math.min(GRID - 1, cx + radius); x++) {
+      if (Math.hypot(x - cx, z - cz) > radius) continue;
       const i = idxOf(x, z);
       if (cells[i] !== 0) {
         destroyed++;
@@ -699,9 +836,10 @@ function detonate(cx, cz) {
       cooldowns[i] = EXPLOSION_COOLDOWN;
     }
   const glider = [[1, 0], [2, 1], [0, 2], [1, 2], [2, 2]];
-  for (let s = 0; s < MAX_DEBRIS_SEEDS; s++) {
+  const debrisCount = debrisN == null ? MAX_DEBRIS_SEEDS : debrisN;
+  for (let s = 0; s < debrisCount; s++) {
     const angle = rnd() * Math.PI * 2;
-    const dist = (EXPLOSION_RADIUS + 1) + rnd() * (EXPLOSION_RADIUS * 1.5);
+    const dist = (radius + 1) + rnd() * (radius * 1.5);
     const px = cx + Math.round(Math.cos(angle) * dist);
     const pz = cz + Math.round(Math.sin(angle) * dist);
     const kind = s % 3;
@@ -721,12 +859,18 @@ function detonate(cx, cz) {
   blasts.push({ x: cx, z: cz, ttl: 0.65 });
   spawnBlastRing(w.x, w.z);
   spawnParticles(w.x, 3, w.z, new THREE.Color(1.0, 0.55, 0.15), 26, 7, 0.8);
-  spawnOrbs(cx, cz, orbCount());
+  spawnOrbs(cx, cz, orbN == null ? orbCount() : orbN);
   const dist = camera.position.distanceTo(new THREE.Vector3(w.x, 3, w.z));
   shake = Math.min(1.1, Math.max(0.15, 16 / (1 + dist * 0.14)));
   explosionsTotal++;
   addXP(3);
   lastExplosion = `(${cx},${cz}) cleared ${destroyed}`;
+  if (destroyed > pilot.rec.biggestBlast) {
+    pilot.rec.biggestBlast = destroyed;
+    savePilot();
+    const now2 = performance.now();
+    if (now2 - lastRecordToastAt > 6000 && destroyed >= 10) { lastRecordToastAt = now2; toast(`🏆 <b>NEW RECORD</b> — biggest blast cleared ${destroyed}!`, 3200, 'gold'); }
+  }
   snapshots = []; tracks = new Map();
   AudioSys.pop(true);
   const now = performance.now();
@@ -774,6 +918,7 @@ function updateVisuals(dt) {
       _c.copy(PALETTE[living - 1]).lerp(ORANGE, ageFactor * 0.55);
       if (ages[i] >= towerLifespan() - 8) _c.lerp(REDHOT, 0.65 + 0.35 * Math.sin(generations * 2.0));
     } else _c.copy(GHOST_A).lerp(GHOST_B, mem);
+    if (fires.has(i)) _c.setRGB(1.0, 0.42 + 0.30 * Math.sin(generations * 3.0 + i), 0.06);
     _c.multiplyScalar(worldBrightness);
     pillarsMesh.setColorAt(i, _c);
   }
@@ -901,10 +1046,13 @@ function useTool(id) {
     }
     makeStasisBubble(target.x, target.z);
   } else if (tool.kind === 'rain') {
+    douseFires(i => Math.hypot((i % GRID) - target.x, Math.floor(i / GRID) - target.z) <= 6);
     seedRainAt(target, 6, 40);
   } else if (tool.kind === 'monsoon') {
+    douseFires(i => Math.hypot((i % GRID) - target.x, Math.floor(i / GRID) - target.z) <= 13);
     seedRainAt(target, 13, 90);
   } else if (tool.kind === 'bigbang') {
+    douseFires(i => Math.hypot((i % GRID) - target.x, Math.floor(i / GRID) - target.z) <= 8);
     placePattern(PULSAR_ROWS, target.x - 6, target.z - 6, brushSpecies);
     placePattern(ACORN_ROWS, target.x - 12, target.z - 12, 1 + (brushSpecies % 3));
     placePattern(GLIDER_ROWS, target.x + 6, target.z + 2, brushSpecies);
@@ -1047,7 +1195,12 @@ function updateHUD() {
   if (historyMode) t += `\n⏳ REPLAY ${historyView + 1}/${historyFrames.length}  —  , / . scrub (Shift ×10)  —  H to return`;
   const next = xpForNext();
   const filled = Math.max(0, Math.min(10, Math.round((pilot.xp / next) * 10)));
-  t += `\nLV ${pilot.level} ${'▓'.repeat(filled)}${'░'.repeat(10 - filled)} ${pilot.xp}/${next} XP  ·  SP ${pilot.sp}  ·  🎣 ${harvesters.length}/${HARVESTER_MAX}`;
+  t += `\n${rankTitle()} — LV ${pilot.level} ${'▓'.repeat(filled)}${'░'.repeat(10 - filled)} ${pilot.xp}/${next} XP  ·  SP ${pilot.sp}  ·  🎣 ${harvesters.length}/${HARVESTER_MAX}`;
+  const fx = [];
+  if (auroraTtl > 0) fx.push(`🌌 Aurora ×2XP ${Math.ceil(auroraTtl / 1000)}s`);
+  if (pollenGens > 0) fx.push(`🌸 Pollen ${pollenGens}gen`);
+  if (fires.size > 0) fx.push(`🔥 Wildfire ${fires.size} cells`);
+  if (fx.length) t += `\n${fx.join('  ·  ')}`;
   $('stats').textContent = t;
 }
 
@@ -1062,7 +1215,7 @@ function refreshUpgradeModal() {
   const el = $('upgrade-modal');
   if (!el) return;
   $('up-sp').textContent = pilot.sp;
-  $('up-level').textContent = `Pilot level ${pilot.level} · ${pilot.xp}/${xpForNext()} XP`;
+  $('up-level').textContent = `${rankTitle()} — pilot level ${pilot.level} · ${pilot.xp}/${xpForNext()} XP`;
   for (const info of UPGRADE_INFO) {
     const lvl = pilot.up[info.id];
     $('up-' + info.id + '-pips').textContent = '●'.repeat(lvl) + '○'.repeat(3 - lvl);
@@ -1071,6 +1224,7 @@ function refreshUpgradeModal() {
     btn.disabled = lvl >= 3 || pilot.sp < 1;
     btn.textContent = lvl >= 3 ? 'MAXED' : 'Spend 1 SP';
   }
+  $('up-records').textContent = `🏆 Records — biggest blast ${pilot.rec.biggestBlast} · tallest tower ${pilot.rec.tallestTower} · best daily ${pilot.rec.bestDaily} · fires doused ${pilot.rec.firesOut} · daily streak ${pilot.streak.count}🔥`;
 }
 function buyUpgrade(id) {
   if (pilot.sp < 1 || pilot.up[id] >= 3) return;
@@ -1146,7 +1300,17 @@ function scoreDaily() {
     if (score > best) localStorage.setItem(key, String(score));
   } catch (e) { }
   AudioSys.fanfare();
-  toast(`🏁 <b>DAILY SCORE @ gen 300</b><br>Alive ${population} · ⚡${biomass} · 🔬${discoveries.size} · 💥${explosionsTotal}<br><b>Score ${score}</b>${score > best ? ' — new personal best!' : ` (best ${best})`}`, 8000, 'gold');
+  const today = dailyDateString();
+  if (pilot.streak.last !== today) {
+    const y = new Date(); y.setDate(y.getDate() - 1);
+    const ystr = `${y.getFullYear()}-${String(y.getMonth() + 1).padStart(2, '0')}-${String(y.getDate()).padStart(2, '0')}`;
+    pilot.streak.count = pilot.streak.last === ystr ? pilot.streak.count + 1 : 1;
+    pilot.streak.last = today;
+    if (pilot.streak.count % 3 === 0) pilot.sp += 1;
+  }
+  if (score > pilot.rec.bestDaily) pilot.rec.bestDaily = score;
+  savePilot();
+  toast(`🏁 <b>DAILY SCORE @ gen 300</b><br>Alive ${population} · ⚡${biomass} · 🔬${discoveries.size} · 💥${explosionsTotal}<br><b>Score ${score}</b>${score > best ? ' — new personal best!' : ` (best ${best})`}<br>🔥 Streak: ${pilot.streak.count} day${pilot.streak.count > 1 ? 's' : ''}${pilot.streak.count > 0 && pilot.streak.count % 3 === 0 ? ' — +1 SP!' : ''}`, 8000, 'gold');
 }
 
 /* ── Minimap ── */
@@ -1170,6 +1334,10 @@ function drawMinimap() {
   }
   ctx.strokeStyle = 'rgba(77,227,255,0.85)';
   ctx.lineWidth = 1.5;
+  if (!historyMode) {
+    ctx.fillStyle = '#ff8a2a';
+    for (const i of fires) ctx.fillRect((i % GRID) * S, Math.floor(i / GRID) * S, S, S);
+  }
   for (const b of stasisBubbles) {
     ctx.beginPath();
     ctx.arc((b.x + 0.5) * S, (b.z + 0.5) * S, STASIS_RADIUS * S, 0, Math.PI * 2);
@@ -1206,6 +1374,7 @@ function updateDayNight(dt) {
     worldBrightness = 0.72 + 0.28 * (0.5 + 0.5 * Math.sin(phase * Math.PI * 2 - Math.PI * 0.5));
   } else worldBrightness = 1;
   scene.background.copy(BASE_BG).multiplyScalar(worldBrightness);
+  if (auroraTtl > 0) { auroraTtl -= dt * 1000; scene.background.lerp(AURORA_BG, 0.55); }
   scene.fog.color.copy(scene.background);
   floorMesh.material.color.copy(BASE_FLOOR).multiplyScalar(worldBrightness);
   sun.intensity = 1.6 * worldBrightness;
@@ -1434,6 +1603,7 @@ function loop() {
   updateBlasts(dt);
   updateOrbs(dt, nowMs);
   updateHarvesters(dt, nowMs);
+  updateMeteor(dt);
   updateDayNight(dt);
   Drone.update();
   for (let b = blasts.length - 1; b >= 0; b--) {

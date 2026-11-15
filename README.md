@@ -2,7 +2,7 @@
 
 **Fly through pillars grown by Conway's Game of Life. Garden it.**
 
-Towers **explode at age 40** — harvest the gold ⚡ **biomass** they leave behind and spend it on seed tools: gliders, pulsars, glider guns, stasis fields. **Discover and catalog 12 named lifeforms** in your field journal. Complete **9 contracts** to become Master Gardener. And your **pilot levels up** as you garden — unlock new seeds, upgrade your genetics, deploy auto-harvesters. Progress saves between sessions (browser localStorage / Godot `user://pilot.cfg`).
+Towers **explode at age 40** — harvest the gold ⚡ **biomass** they leave behind and spend it on seed tools: gliders, pulsars, glider guns, stasis fields. **Discover and catalog 12 named lifeforms** in your field journal. Complete **9 contracts** to become Master Gardener. Your **pilot levels up** as you garden — unlock new seeds, upgrade your genetics, deploy auto-harvesters. And the world itself is alive: **weather strikes unannounced** and the **three species compete, rock-paper-scissors style**. Progress saves between sessions (browser localStorage / Godot `user://pilot.cfg`).
 
 ![Godot](https://img.shields.io/badge/Godot-4.7-478cbf) ![Web](https://img.shields.io/badge/Web-Play%20now-22d3ee) ![Three.js](https://img.shields.io/badge/Three.js-r160-e879f9)
 
@@ -74,6 +74,24 @@ Everything you do earns **XP**: **+25** per discovery, **+30** per contract, **+
 
 Level 7 also unlocks the **Area Brush** — `F` stamps a 3×3 meadow instead of a single cell. Press `Y` to deploy an **auto-harvester** (40⚡, max 3): a floating collector ring that vacuums any orb drifting within radius 12. Upgrades apply to every world you fly, in both versions, and persist across sessions.
 
+Your pilot earns a **rank title** as they level: Sprout Tender → Seed Sower → Groundskeeper → Landscape Architect → Master Gardener → Worldshaper. The Genetics Lab also keeps your **records** — biggest blast, tallest tower, best daily score, fires doused — and your **daily streak**: score the daily challenge on consecutive days and every 3rd day pays a bonus skill point.
+
+### 🌍 Wildlands: weather, events & ecology
+
+After generation 40, **weather strikes every ~90–160 generations** — unannounced, weighted, and (in daily mode) identical for everyone playing that day, since events draw from the seeded RNG:
+
+| Event | What happens |
+|---|---|
+| ☄️ **Meteor** | A blazing rock streaks in over ~1.5s and impacts: radius-5 crater, 16 debris seeds, **10 orbs**, big shake |
+| 🔥 **Wildfire** | Ignites old towers and dry ghost-memory ground; the front spreads ~1 cell/generation and burns everything it touches. **Counterplay**: douse it with Seed Rain / Monsoon / Big Bang (+2 XP per fire), or freeze the front with a Stasis Field |
+| 🌌 **Aurora** | The sky glows green — **double XP for 60 seconds** |
+| 🌸 **Pollen bloom** | Terrain memory gain **doubles for 60 generations** — ghosts grow tall and pillars soar |
+
+Under the weather, the **ecology** changed (B3/S23 itself is untouched — the species layer got interactions):
+
+- 🥊 **Rock-paper-scissors pressure** — a surviving tower with 3 neighbours of the species that dominates it is assimilated: **magenta beats cyan, green beats magenta, cyan beats green**. Territories ebb and flow on the minimap; seed a rival behind enemy lines to flip a front
+- 🤝 **Symbiotic harmony** — a cell whose neighbourhood contains all 3 species **stops aging** while the balance holds. Mixed meadows live forever; monocultures burn down and explode
+
 ### 🔬 Field journal
 
 The game **recognizes what your ecosystem grows**. Each connected pattern is shape-matched (all rotations & mirrors) against a library of famous lifeforms — discover one and it's journaled forever, with a **+10⚡ bonus**:
@@ -90,7 +108,7 @@ Press `S` for a compact **EVO1 code** (run-length encoded, species included) —
 
 - **Minimap** (`K`) — live species territories, ghost memory, stasis bubbles, and your position + heading, bottom-right
 - **Replay** (`H`) — rewinds through the last **100 generations**; scrub with `,` / `.` (Shift ×10) or the slider (web). Sim pauses, the world dims, and you can watch explosions unfold backwards and forwards. Great for seeing how a territory war actually happened
-- **Daily challenge** (`D`) — a date-derived seed generates the **same starting world for everyone playing that day**. At generation 300 your run is scored: `alive×3 + biomass + discoveries×25 + explosions×5`. Personal bests persist (browser localStorage / Godot `user://daily.cfg`). Press `R` to return to free mode
+- **Daily challenge** (`D`) — a date-derived seed generates the **same starting world for everyone playing that day**, and the same weather events too. At generation 300 your run is scored: `alive×3 + biomass + discoveries×25 + explosions×5`. Personal bests persist (browser localStorage / Godot `user://daily.cfg`), and consecutive scored days build a **streak** (+1 SP every 3 days). Press `R` to return to free mode
 
 ### ✨ Atmosphere
 
