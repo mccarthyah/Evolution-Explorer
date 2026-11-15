@@ -52,14 +52,45 @@ const ORB_TTL: float = 20.0
 const STASIS_RADIUS: int = 5
 const STASIS_GENS: int = 30
 const STARTING_BIOMASS: int = 20
-const TOOLS: Dictionary = {
-	KEY_4: {"name": "R-pentomino", "cost": 5},
-	KEY_5: {"name": "Glider", "cost": 10},
-	KEY_6: {"name": "Pulsar", "cost": 25},
-	KEY_7: {"name": "Seed Rain", "cost": 20},
-	KEY_8: {"name": "Stasis Field", "cost": 15},
-	KEY_9: {"name": "Glider Gun", "cost": 60},
+const LWSS_ROWS: Array = [".O..O", "O....", "O...O", "OOOO."]
+const ACORN_ROWS: Array = [".O.....", "...O...", "OO..OOO"]
+const SIMKIN_ROWS: Array = [
+	"OO.....OO",
+	"OO.....OO",
+	"",
+	"....OO",
+	"....OO",
+	"",
+	"",
+	"",
+	"",
+	"......................O...O",
+	".....................O....OO",
+	"....................OO.....OO..OO",
+	".....................OO....O...OO",
+	"......................O",
+]
+# Seed catalog: keys 4-9 direct; Q/E cycle and place. Unlocks via levels or journal.
+const TOOL_CATALOG: Array = [
+	{"id": "rpento", "name": "R-pentomino", "cost": 5, "rows": R_PENTOMINO_ROWS},
+	{"id": "glider", "name": "Glider", "cost": 10, "rows": GLIDER_ROWS},
+	{"id": "pulsar", "name": "Pulsar", "cost": 25, "rows": PULSAR_ROWS, "centered": true},
+	{"id": "rain", "name": "Seed Rain", "cost": 20, "kind": "rain"},
+	{"id": "stasis", "name": "Stasis Field", "cost": 15, "kind": "stasis"},
+	{"id": "gun", "name": "Glider Gun", "cost": 60, "rows": GUN_ROWS},
+	{"id": "lwss", "name": "Lightweight Ship", "cost": 15, "rows": LWSS_ROWS, "unlock": {"discover": "Lightweight Ship"}},
+	{"id": "monsoon", "name": "Monsoon", "cost": 30, "kind": "monsoon", "unlock": {"level": 4}},
+	{"id": "acorn", "name": "Acorn", "cost": 20, "rows": ACORN_ROWS, "unlock": {"level": 5}},
+	{"id": "simkin", "name": "Simkin Gun", "cost": 45, "rows": SIMKIN_ROWS, "unlock": {"level": 6}},
+	{"id": "bigbang", "name": "Big Bang", "cost": 100, "kind": "bigbang", "unlock": {"level": 10}},
+]
+const TOOL_KEYS: Dictionary = {
+	KEY_4: "rpento", KEY_5: "glider", KEY_6: "pulsar",
+	KEY_7: "rain", KEY_8: "stasis", KEY_9: "gun",
 }
+const HARVESTER_COST: int = 40
+const HARVESTER_MAX: int = 3
+const HARVESTER_RADIUS: float = 12.0
 const R_PENTOMINO_ROWS: Array = [".XX", "XX.", ".X."]
 const GLIDER_ROWS: Array = [".O.", "..O", "OOO"]
 const PULSAR_ROWS: Array = [
@@ -155,6 +186,17 @@ var daily_mode: bool = false
 var daily_scored: bool = false
 var rng_state: int = -1
 
+# ── Pilot progression (persists in user://pilot.cfg) ──
+var pilot: Dictionary = {
+	"xp": 0, "level": 1, "sp": 0, "area_brush": false,
+	"up": {"vigor": 0, "fertility": 0, "volatility": 0, "magnetism": 0},
+	"tools": ["rpento", "glider", "pulsar", "rain", "stasis", "gun"],
+}
+var tool_by_id: Dictionary = {}
+var selected_tool_idx: int = 0
+var harvesters: Array[Dictionary] = []
+var upgrade_label: Label
+
 var mesh_instance: MultiMeshInstance3D
 var multimesh: MultiMesh
 var camera: Camera3D
@@ -176,6 +218,9 @@ func _ready() -> void:
 	seed_world()
 	biomass = STARTING_BIOMASS
 	build_journal_sigs()
+	for tool in TOOL_CATALOG:
+		tool_by_id[tool["id"]] = tool
+	load_pilot()
 	Input.mouse_mode = Input.MOUSE_MODE_VISIBLE
 
 func build_world() -> void:
@@ -253,6 +298,7 @@ func build_world() -> void:
 	canvas.add_child(hint)
 	hint.text += "\nInstability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON"
 	hint.text += "\nK minimap  |  H replay (, / . scrub)  |  D daily challenge"
+	hint.text += "\nU genetics lab  |  Q/E select/place seeds  |  Y auto-harvester 40⚡"
 	toast_label = Label.new()
 	toast_label.position = Vector2(420.0, 92.0)
 	toast_label.add_theme_font_size_override("font_size", 19)
@@ -266,6 +312,13 @@ func build_world() -> void:
 	journal_label.visible = false
 	canvas.add_child(journal_label)
 	refresh_journal()
+	upgrade_label = Label.new()
+	upgrade_label.position = Vector2(640.0, 150.0)
+	upgrade_label.add_theme_font_size_override("font_size", 17)
+	upgrade_label.add_theme_color_override("font_color", Color(0.65, 1.0, 0.85))
+	upgrade_label.visible = false
+	canvas.add_child(upgrade_label)
+	refresh_upgrade_label()
 	build_minimap(canvas)
 
 func index_of(x: int, z: int) -> int:
@@ -359,7 +412,7 @@ func step_simulation() -> void:
 			else:
 				ages[i] = 1
 			if not frozen:
-				history[i] = minf(HISTORY_LIMIT, history[i] + 0.065)
+				history[i] = minf(HISTORY_LIMIT, history[i] + memory_gain())
 		else:
 			ages[i] = 0
 			if not frozen:
@@ -382,11 +435,11 @@ func update_instability() -> void:
 	for i in range(TOTAL):
 		if explosion_cooldowns[i] > 0:
 			explosion_cooldowns[i] -= 1
-		if cells[i] != 0 and ages[i] >= TOWER_LIFESPAN and explosion_cooldowns[i] == 0 and not in_stasis(i % GRID, i / GRID):
+		if cells[i] != 0 and ages[i] >= tower_lifespan() and explosion_cooldowns[i] == 0 and not in_stasis(i % GRID, i / GRID):
 			explosion_queue.append(Vector2i(i % GRID, i / GRID))
 			# Prevent the same cell being queued repeatedly while waiting.
 			explosion_cooldowns[i] = EXPLOSION_COOLDOWN
-		if cells[i] != 0 and ages[i] >= TOWER_LIFESPAN - 8:
+		if cells[i] != 0 and ages[i] >= tower_lifespan() - 8:
 			warning_timers[i] = 8
 		elif warning_timers[i] > 0:
 			warning_timers[i] -= 1
@@ -447,6 +500,8 @@ func find_oscillators() -> void:
 				discoveries[pname] = true
 				biomass += 10
 				biomass_collected_total += 10
+				add_xp(25)
+				check_discover_unlock(pname)
 				show_banner("🔬 DISCOVERED: %s  (+10 ⚡)" % pname, Color(0.55, 0.9, 1.0))
 				print("EVOLUTION: discovered ", pname, " at generation ", generations)
 				refresh_journal()
@@ -520,7 +575,7 @@ func detonate(center: Vector2i) -> void:
 			if cells[i] != 0:
 				destroyed += 1
 				# Chain reactions: near-expired towers may detonate next generation.
-				if ages[i] >= TOWER_LIFESPAN - 6 and i != source and explosion_cooldowns[i] == 0 and not in_stasis(x, z):
+				if ages[i] >= tower_lifespan() - 6 and i != source and explosion_cooldowns[i] == 0 and not in_stasis(x, z):
 					explosion_queue.append(Vector2i(x, z))
 			cells[i] = 0
 			ages[i] = 0
@@ -554,9 +609,10 @@ func detonate(center: Vector2i) -> void:
 	var blast_node := _make_blast_node(blast_pos)
 	blasts.append({"x": center.x, "z": center.y, "ttl": 0.65, "node": blast_node})
 	_spawn_burst(blast_pos, Color(1.0, 0.55, 0.15), 26)
-	spawn_orbs(center.x, center.y, 3)
+	spawn_orbs(center.x, center.y, orb_count())
 	shake = clampf(16.0 / (1.0 + blast_pos.distance_to(camera.global_position) * 0.14), 0.15, 1.1)
 	explosions_total += 1
+	add_xp(3)
 	last_explosion = "(%d,%d) cleared %d" % [center.x, center.y, destroyed]
 	pattern_snapshots.clear()
 	oscillator_tracks.clear()
@@ -648,6 +704,11 @@ func _process(delta: float) -> void:
 		shake_offset = Vector3.ZERO
 	camera.global_position += shake_offset
 	update_orbs(delta)
+	for h in harvesters:
+		var hnode: MeshInstance3D = h["node"] as MeshInstance3D
+		if hnode != null and is_instance_valid(hnode):
+			hnode.rotate_y(delta * 1.2)
+			hnode.position.y = 5.0 + sin(float(h["phase"]) + Time.get_ticks_msec() * 0.0015) * 0.4
 	if toast_ttl > 0.0:
 		toast_ttl -= delta
 		if toast_ttl <= 0.0:
@@ -668,6 +729,10 @@ func _process(delta: float) -> void:
 	hud.text += "\n⚡ Biomass %d   |   🔬 %d/%d   |   Contract %s" % [biomass, discoveries.size(), JOURNAL_PATTERNS.size(), contract_hud_text()]
 	if history_mode:
 		hud.text += "\n⏳ REPLAY %d/%d  —  , / . scrub (Shift ×10)  —  H to return" % [history_view + 1, history_frames.size()]
+	var next_xp: int = xp_for_next()
+	var filled_xp: int = clampi(int(float(pilot["xp"]) / float(next_xp) * 10.0), 0, 10)
+	var xp_bar: String = "▓".repeat(filled_xp) + "░".repeat(10 - filled_xp)
+	hud.text += "\nLV %d %s %d/%d XP  ·  SP %d  ·  🎣 %d/%d" % [int(pilot["level"]), xp_bar, int(pilot["xp"]), next_xp, int(pilot["sp"]), harvesters.size(), HARVESTER_MAX]
 
 func update_visuals(delta: float) -> void:
 	if history_mode:
@@ -705,7 +770,7 @@ func update_visuals(delta: float) -> void:
 		var tint: Color
 		if living > 0:
 			tint = PALETTE[living - 1].lerp(Color(1.0, 0.52, 0.26), age_factor * 0.55)
-			if ages[i] >= TOWER_LIFESPAN - 8:
+			if ages[i] >= tower_lifespan() - 8:
 				tint = tint.lerp(Color(1.0, 0.16, 0.04), 0.65 + 0.35 * sin(float(generations) * 2.0))
 		else:
 			tint = Color(0.06, 0.14, 0.26).lerp(Color(0.19, 0.26, 0.42), terrain_memory)
@@ -741,6 +806,19 @@ func _notification(what: int) -> void:
 
 func _unhandled_input(event: InputEvent) -> void:
 	if event is InputEventKey and event.pressed and not event.echo:
+		if upgrade_label != null and upgrade_label.visible:
+			match event.keycode:
+				KEY_1:
+					buy_upgrade("vigor")
+				KEY_2:
+					buy_upgrade("fertility")
+				KEY_3:
+					buy_upgrade("volatility")
+				KEY_4:
+					buy_upgrade("magnetism")
+				KEY_U:
+					upgrade_label.visible = false
+			return
 		match event.keycode:
 			KEY_ESCAPE, KEY_F10:
 				get_tree().quit()
@@ -786,7 +864,18 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_1, KEY_2, KEY_3:
 				brush_species = event.keycode - KEY_1 + 1
 			KEY_4, KEY_5, KEY_6, KEY_7, KEY_8, KEY_9:
-				use_tool(event.keycode)
+				use_tool(TOOL_KEYS[event.keycode])
+			KEY_Q:
+				cycle_tool()
+			KEY_E:
+				var tool_list: Array = unlocked_tools()
+				if not tool_list.is_empty() and selected_tool_idx < tool_list.size():
+					use_tool(tool_list[selected_tool_idx]["id"])
+			KEY_U:
+				upgrade_label.visible = not upgrade_label.visible
+				refresh_upgrade_label()
+			KEY_Y:
+				place_harvester()
 			KEY_B:
 				if world_env != null:
 					world_env.glow_enabled = not world_env.glow_enabled
@@ -834,7 +923,16 @@ func paint_at_cursor(screen_pos: Vector2, alive: bool) -> void:
 	var i: int = index_of(x, z)
 	cells[i] = brush_species if alive else 0
 	ages[i] = 1 if alive else 0
-	if alive:
+	if alive and pilot["area_brush"]:
+		for dz in range(-1, 2):
+			for dx in range(-1, 2):
+				var nx: int = x + dx
+				var nz: int = z + dz
+				if nx >= 0 and nx < GRID and nz >= 0 and nz < GRID:
+					cells[index_of(nx, nz)] = brush_species
+					ages[index_of(nx, nz)] = 1
+		painted_cells += 9
+	elif alive:
 		painted_cells += 1
 	refresh_population()
 
@@ -867,12 +965,45 @@ func place_pattern(rows: Array, origin: Vector2i, species: int) -> int:
 	refresh_population()
 	return placed
 
-func use_tool(keycode: int) -> void:
+func seed_rain_at(target: Vector2i, radius: float, count: int) -> void:
+	for k in range(count):
+		var angle: float = rnd() * TAU
+		var dist: float = rnd() * radius
+		var x: int = clampi(target.x + roundi(cos(angle) * dist), 0, GRID - 1)
+		var z: int = clampi(target.y + roundi(sin(angle) * dist), 0, GRID - 1)
+		var i: int = index_of(x, z)
+		cells[i] = brush_species if rnd() < 0.75 else rnd_range(1, 3)
+		ages[i] = 1
+	refresh_population()
+
+func unlocked_tools() -> Array:
+	var list: Array = []
+	for tool in TOOL_CATALOG:
+		if (pilot["tools"] as Array).has(tool["id"]):
+			list.append(tool)
+	return list
+
+func cycle_tool() -> void:
+	var list: Array = unlocked_tools()
+	if list.is_empty():
+		return
+	selected_tool_idx = (selected_tool_idx + 1) % list.size()
+	show_banner("🧰 %s (%d⚡) — E to place" % [list[selected_tool_idx]["name"], int(list[selected_tool_idx]["cost"])], Color(0.77, 0.83, 0.96))
+
+func use_tool(id: String) -> void:
+	if not tool_by_id.has(id):
+		return
 	if history_mode:
 		show_banner("Exit replay (H) before using tools", Color(1.0, 0.55, 0.6))
 		return
-	var tool: Dictionary = TOOLS[keycode]
+	var tool: Dictionary = tool_by_id[id]
 	var cost: int = int(tool["cost"])
+	if not (pilot["tools"] as Array).has(id):
+		var lock_hint: String = "discover it in the wild"
+		if tool.has("unlock") and tool["unlock"].has("level"):
+			lock_hint = "reach level %d" % int(tool["unlock"]["level"])
+		show_banner("%s is locked — %s" % [tool["name"], lock_hint], Color(1.0, 0.55, 0.6))
+		return
 	if biomass < cost:
 		show_banner("Not enough biomass for %s — need %d ⚡" % [tool["name"], cost], Color(1.0, 0.55, 0.6))
 		return
@@ -880,32 +1011,29 @@ func use_tool(keycode: int) -> void:
 	if target.x < 0:
 		show_banner("Aim at the ground to place " + tool["name"], Color(1.0, 0.55, 0.6))
 		return
-	match keycode:
-		KEY_4:
-			place_pattern(R_PENTOMINO_ROWS, target, brush_species)
-		KEY_5:
-			place_pattern(GLIDER_ROWS, target, brush_species)
-		KEY_6:
-			place_pattern(PULSAR_ROWS, Vector2i(target.x - 6, target.y - 6), brush_species)
-		KEY_7:
-			for k in range(40):
-				var angle: float = rnd() * TAU
-				var dist: float = rnd() * 6.0
-				var x: int = clampi(target.x + roundi(cos(angle) * dist), 0, GRID - 1)
-				var z: int = clampi(target.y + roundi(sin(angle) * dist), 0, GRID - 1)
-				var i: int = index_of(x, z)
-				cells[i] = brush_species if rnd() < 0.75 else rnd_range(1, 3)
-				ages[i] = 1
-			refresh_population()
-		KEY_8:
-			if stasis_bubbles.size() >= 4:
-				show_banner("Too many stasis fields active", Color(1.0, 0.55, 0.6))
-				return
-			make_stasis_bubble(target)
-		KEY_9:
-			place_pattern(GUN_ROWS, target, brush_species)
+	var kind: String = String(tool.get("kind", ""))
+	if kind == "stasis":
+		if stasis_bubbles.size() >= 4:
+			show_banner("Too many stasis fields active", Color(1.0, 0.55, 0.6))
+			return
+		make_stasis_bubble(target)
+	elif kind == "rain":
+		seed_rain_at(target, 6.0, 40)
+	elif kind == "monsoon":
+		seed_rain_at(target, 13.0, 90)
+	elif kind == "bigbang":
+		place_pattern(PULSAR_ROWS, Vector2i(target.x - 6, target.y - 6), brush_species)
+		place_pattern(ACORN_ROWS, Vector2i(target.x - 12, target.y - 12), 1 + (brush_species % 3))
+		place_pattern(GLIDER_ROWS, Vector2i(target.x + 6, target.y + 2), brush_species)
+		place_pattern(GLIDER_ROWS, Vector2i(target.x + 2, target.y + 8), 1 + ((brush_species + 1) % 3))
+		seed_rain_at(target, 8.0, 30)
+	elif tool.has("rows"):
+		var origin: Vector2i = target
+		if tool.has("centered"):
+			origin = Vector2i(target.x - 6, target.y - 6)
+		place_pattern(tool["rows"], origin, brush_species)
 	biomass -= cost
-	tools_used[keycode] = true
+	tools_used[id] = true
 	show_banner("%s placed  (-%d ⚡)" % [tool["name"], cost], Color(0.65, 1.0, 0.85))
 
 func make_stasis_bubble(target: Vector2i) -> void:
@@ -962,7 +1090,7 @@ func spawn_orbs(cx: int, cz: int, count: int) -> void:
 		node.mesh = mesh
 		node.position = Vector3(wx, 2.2, wz)
 		add_child(node)
-		orbs.append({"node": node, "ttl": ORB_TTL, "value": ORB_VALUE, "base": Vector3(wx, 2.2, wz), "phase": rng.randf_range(0.0, TAU)})
+		orbs.append({"node": node, "ttl": ORB_TTL, "value": orb_value(), "base": Vector3(wx, 2.2, wz), "phase": rng.randf_range(0.0, TAU)})
 
 func update_orbs(delta: float) -> void:
 	for o in range(orbs.size() - 1, -1, -1):
@@ -977,9 +1105,17 @@ func update_orbs(delta: float) -> void:
 			if remaining < 4.0:
 				var s: float = clampf(0.30 * remaining / 4.0, 0.10, 0.30)
 				node.scale = Vector3(s / 0.30, s / 0.30, s / 0.30)
-		if camera.global_position.distance_to(base) < 2.6:
+		var collected: bool = camera.global_position.distance_to(base) < collect_radius()
+		if not collected:
+			for h in harvesters:
+				var hnode: MeshInstance3D = h["node"] as MeshInstance3D
+				if hnode != null and is_instance_valid(hnode) and hnode.global_position.distance_to(base) < HARVESTER_RADIUS:
+					collected = true
+					break
+		if collected:
 			biomass += int(orb["value"])
 			biomass_collected_total += int(orb["value"])
+			add_xp(ceili(float(orb["value"]) / 5.0))
 			show_banner("+%d ⚡ biomass" % int(orb["value"]), Color(1.0, 0.85, 0.3))
 			if valid_node:
 				node.queue_free()
@@ -1003,6 +1139,7 @@ func check_contract() -> void:
 	if not contract_done(contract):
 		return
 	biomass += int(contract["reward"])
+	add_xp(30)
 	contract_index += 1
 	show_banner("✔ CONTRACT COMPLETE: %s  (+%d ⚡)" % [contract["text"], int(contract["reward"])], Color(1.0, 0.85, 0.3))
 	print("EVOLUTION: contract complete: ", contract["id"], " at generation ", generations)
@@ -1285,6 +1422,7 @@ func start_daily() -> void:
 
 func score_daily() -> void:
 	daily_scored = true
+	add_xp(50)
 	var score: int = population * 3 + biomass + discoveries.size() * 25 + explosions_total * 5
 	var config: ConfigFile = ConfigFile.new()
 	config.load("user://daily.cfg")
@@ -1331,3 +1469,137 @@ func _draw_minimap() -> void:
 		dir = dir.normalized()
 	minimap.draw_line(p, p + dir * 9.0, Color(1.0, 1.0, 1.0), 1.5)
 	minimap.draw_circle(p, 3.0, Color(1.0, 1.0, 1.0))
+
+# ── Pilot progression: persistence, XP, unlocks, genetics ──
+func load_pilot() -> void:
+	var config: ConfigFile = ConfigFile.new()
+	if config.load("user://pilot.cfg") != OK:
+		return
+	pilot["xp"] = int(config.get_value("pilot", "xp", 0))
+	pilot["level"] = maxi(1, int(config.get_value("pilot", "level", 1)))
+	pilot["sp"] = int(config.get_value("pilot", "sp", 0))
+	pilot["area_brush"] = bool(config.get_value("pilot", "area_brush", false))
+	for track in ["vigor", "fertility", "volatility", "magnetism"]:
+		pilot["up"][track] = clampi(int(config.get_value("up", track, 0)), 0, 3)
+	var saved_tools: Array = config.get_value("tools", "ids", [])
+	for id in saved_tools:
+		if not (pilot["tools"] as Array).has(id) and tool_by_id.has(id):
+			(pilot["tools"] as Array).append(id)
+
+func save_pilot() -> void:
+	var config: ConfigFile = ConfigFile.new()
+	config.set_value("pilot", "xp", pilot["xp"])
+	config.set_value("pilot", "level", pilot["level"])
+	config.set_value("pilot", "sp", pilot["sp"])
+	config.set_value("pilot", "area_brush", pilot["area_brush"])
+	for track in ["vigor", "fertility", "volatility", "magnetism"]:
+		config.set_value("up", track, pilot["up"][track])
+	config.set_value("tools", "ids", pilot["tools"])
+	config.save("user://pilot.cfg")
+
+func xp_for_next() -> int:
+	return 50 + (int(pilot["level"]) - 1) * 25
+
+func add_xp(n: int) -> void:
+	pilot["xp"] = int(pilot["xp"]) + n
+	var leveled: bool = false
+	while int(pilot["xp"]) >= xp_for_next():
+		pilot["xp"] = int(pilot["xp"]) - xp_for_next()
+		pilot["level"] = int(pilot["level"]) + 1
+		pilot["sp"] = int(pilot["sp"]) + 1
+		leveled = true
+		check_level_unlocks()
+	if leveled:
+		show_banner("⬆️ PILOT LEVEL %d — +1 skill point (U to spend)" % int(pilot["level"]), Color(1.0, 0.85, 0.3))
+		save_pilot()
+		refresh_upgrade_label()
+
+func check_level_unlocks() -> void:
+	for tool in TOOL_CATALOG:
+		var tool_id: String = tool["id"]
+		if tool.has("unlock") and tool["unlock"].has("level") and int(tool["unlock"]["level"]) == int(pilot["level"]) and not (pilot["tools"] as Array).has(tool_id):
+			(pilot["tools"] as Array).append(tool_id)
+			show_banner("🔓 New seed unlocked: %s (%d⚡) — Q/E to select" % [tool["name"], int(tool["cost"])], Color(1.0, 0.85, 0.3))
+	if int(pilot["level"]) >= 7 and not pilot["area_brush"]:
+		pilot["area_brush"] = true
+		show_banner("🔓 Area Brush unlocked — F stamps 3×3 meadows", Color(1.0, 0.85, 0.3))
+
+func check_discover_unlock(pname: String) -> void:
+	for tool in TOOL_CATALOG:
+		if tool.has("unlock") and tool["unlock"].has("discover") and String(tool["unlock"]["discover"]) == pname and not (pilot["tools"] as Array).has(tool["id"]):
+			(pilot["tools"] as Array).append(tool["id"])
+			show_banner("🔓 New seed unlocked: %s — discovered in the wild!" % tool["name"], Color(1.0, 0.85, 0.3))
+			save_pilot()
+
+func tower_lifespan() -> int:
+	return TOWER_LIFESPAN + 7 * int(pilot["up"]["vigor"])
+
+func memory_gain() -> float:
+	return 0.065 * (1.0 + 0.5 * float(pilot["up"]["fertility"]))
+
+func orb_count() -> int:
+	return 3 + int(pilot["up"]["volatility"])
+
+func orb_value() -> int:
+	return ORB_VALUE + int(pilot["up"]["magnetism"])
+
+func collect_radius() -> float:
+	return 2.6 + 0.8 * float(pilot["up"]["magnetism"])
+
+func refresh_upgrade_label() -> void:
+	if upgrade_label == null:
+		return
+	var t: String = "🧬 GENETICS LAB — SP %d\n\n" % int(pilot["sp"])
+	t += "1 Vigor      [%s]  tower lifespan %d\n" % [pips("vigor"), tower_lifespan()]
+	t += "2 Fertility  [%s]  memory gain +%.0f%%\n" % [pips("fertility"), 50.0 * float(pilot["up"]["fertility"])]
+	t += "3 Volatility [%s]  %d orbs per blast\n" % [pips("volatility"), orb_count()]
+	t += "4 Magnetism  [%s]  orbs %d⚡, radius %.1f\n\n" % [pips("magnetism"), orb_value(), collect_radius()]
+	t += "U close  ·  1-4 spend"
+	upgrade_label.text = t
+
+func pips(track: String) -> String:
+	var lvl: int = int(pilot["up"][track])
+	var s: String = ""
+	for k in range(3):
+		s += "●" if k < lvl else "○"
+	return s
+
+func buy_upgrade(track: String) -> void:
+	if int(pilot["sp"]) < 1 or int(pilot["up"][track]) >= 3:
+		return
+	pilot["sp"] = int(pilot["sp"]) - 1
+	pilot["up"][track] = int(pilot["up"][track]) + 1
+	show_banner("🧬 %s upgraded to %d" % [track.capitalize(), int(pilot["up"][track])], Color(0.65, 1.0, 0.85))
+	save_pilot()
+	refresh_upgrade_label()
+
+func place_harvester() -> void:
+	if history_mode:
+		show_banner("Exit replay (H) first", Color(1.0, 0.55, 0.6))
+		return
+	if biomass < HARVESTER_COST:
+		show_banner("Auto-harvester costs %d ⚡" % HARVESTER_COST, Color(1.0, 0.55, 0.6))
+		return
+	if harvesters.size() >= HARVESTER_MAX:
+		show_banner("Max %d harvesters" % HARVESTER_MAX, Color(1.0, 0.55, 0.6))
+		return
+	var target: Vector2i = aim_cell()
+	if target.x < 0:
+		show_banner("Aim at the ground to place the harvester", Color(1.0, 0.55, 0.6))
+		return
+	var pos: Vector3 = Vector3((float(target.x) - float(GRID - 1) * 0.5) * SPACING, 5.0, (float(target.y) - float(GRID - 1) * 0.5) * SPACING)
+	var cyl: CylinderMesh = CylinderMesh.new()
+	cyl.top_radius = 1.5
+	cyl.bottom_radius = 1.5
+	cyl.height = 0.25
+	var mat: StandardMaterial3D = StandardMaterial3D.new()
+	mat.shading_mode = BaseMaterial3D.SHADING_MODE_UNSHADED
+	mat.albedo_color = Color(0.33, 1.0, 0.69)
+	cyl.material = mat
+	var node: MeshInstance3D = MeshInstance3D.new()
+	node.mesh = cyl
+	node.position = pos
+	add_child(node)
+	harvesters.append({"node": node, "phase": rng.randf_range(0.0, TAU)})
+	biomass -= HARVESTER_COST
+	show_banner("🎣 Auto-harvester deployed (-%d ⚡)" % HARVESTER_COST, Color(0.65, 1.0, 0.85))

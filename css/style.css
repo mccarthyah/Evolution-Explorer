@@ -67,4 +67,11 @@ html,body{width:100%;height:100%;overflow:hidden;background:var(--bg);color:var(
 .modal-btn{flex:0 0 auto;background:var(--panel);border:1px solid var(--panel-border);color:var(--text);font-family:var(--font);font-size:13.5px;font-weight:700;padding:9px 20px;border-radius:999px;cursor:pointer}
 .modal-btn:hover{border-color:var(--cyan)}
 .modal-btn.primary{background:linear-gradient(90deg,#0891b2,var(--cyan));border:none}
+.modal-btn.danger{color:var(--danger);border-color:rgba(251,113,133,.4)}
+.modal-btn:disabled{opacity:.35;cursor:default}
+.up-row{display:flex;align-items:center;justify-content:space-between;gap:14px;padding:11px 0;border-bottom:1px solid rgba(255,255,255,.06)}
+.up-info b{font-size:14.5px}
+.pips{color:var(--lime);letter-spacing:3px;font-size:13px;margin-left:8px}
+.up-desc{font-size:12px;color:var(--dim)}
+.up-hint{font-size:11.5px;color:#6b7396;margin:12px 0 0;line-height:1.5}
 @media (max-width:700px){#stats{font-size:12px}#hint{font-size:10.5px}.journal{width:210px}}

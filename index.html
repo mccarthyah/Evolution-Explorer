@@ -21,14 +21,14 @@
     <div class="logo">🧬</div>
     <h1>EVOLUTION<br><span>LIVING TERRAIN</span></h1>
     <p class="tagline">Fly through pillars <b>grown by the Game of Life</b>.<br>
-    Towers <b>explode at age 40</b> — harvest the gold <b>⚡ biomass</b> they leave behind<br>
-    and spend it on <b>seed tools</b>: gliders, pulsars, glider guns, stasis fields.<br>
-    Complete <b>8 contracts</b> to become Master Gardener.</p>
+    Harvest <b>⚡ biomass</b> from explosions, spend it on <b>seeds</b>, and level up your pilot —<br>
+    <b>genetics upgrades</b>, unlockable seeds (Acorn, Simkin Gun, Big Bang),<br>
+    <b>12 lifeforms</b> to discover, 9 contracts, daily challenges. Progress saves.</p>
     <div class="howto">
       <div class="howto-row"><span>🕹️</span><p><b>WASD</b> fly &nbsp;•&nbsp; <b>Arrow keys</b> look &nbsp;•&nbsp; <b>Space/Ctrl</b> rise/fall &nbsp;•&nbsp; <b>Shift</b> boost</p></div>
       <div class="howto-row"><span>🎨</span><p><b>F</b> place cell / <b>G</b> erase at screen centre — species <b>1 / 2 / 3</b> (or click the ground)</p></div>
-      <div class="howto-row"><span>⚡</span><p><b>Harvest gold orbs</b> at blast sites for biomass — tools: <b>4</b> R-pento 5⚡ • <b>5</b> Glider 10⚡ • <b>6</b> Pulsar 25⚡</p></div>
-      <div class="howto-row"><span>🧰</span><p><b>7</b> Seed Rain 20⚡ • <b>8</b> Stasis Field 15⚡ • <b>9</b> Glider Gun 60⚡ — aim at the ground</p></div>
+      <div class="howto-row"><span>⚡</span><p><b>Harvest gold orbs</b> at blast sites for biomass + XP — seeds: <b>4-9</b> or cycle with <b>Q/E</b> • more unlock as you level</p></div>
+      <div class="howto-row"><span>🧬</span><p><b>U</b> Genetics Lab (spend skill points) • <b>Y</b> deploy auto-harvester 40⚡ • aim tools at the ground</p></div>
       <div class="howto-row"><span>👁️</span><p><b>V</b> overview &nbsp;•&nbsp; <b>P</b> pause &nbsp;•&nbsp; <b>N</b> step &nbsp;•&nbsp; <b>R</b> random &nbsp;•&nbsp; <b>[ / ]</b> speed &nbsp;•&nbsp; <b>M</b> memory</p></div>
       <div class="howto-row"><span>🔬</span><p><b>J</b> field journal — discover 12 named lifeforms &nbsp;•&nbsp; <b>S / L</b> save &amp; share ecosystem codes &nbsp;•&nbsp; <b>B</b> bloom &nbsp;•&nbsp; <b>T</b> day/night</p></div>
       <div class="howto-row"><span>🗺️</span><p><b>K</b> minimap &nbsp;•&nbsp; <b>H</b> replay history (<b>, / .</b> scrub, Shift ×10) &nbsp;•&nbsp; <b>D</b> daily challenge — same world for everyone, score at gen 300</p></div>
@@ -45,7 +45,8 @@
 V overview | P pause | N step | R randomize | C clear | Esc pause
 [ / ] speed | - / = height | M memory | 1/2/3 species | F/G place/erase cell
 Seed tools (aim at ground): 4 R-pento 5⚡ | 5 Glider 10⚡ | 6 Pulsar 25⚡ | 7 Rain 20⚡
-8 Stasis 15⚡ | 9 Glider Gun 60⚡ — harvest gold orbs at blast sites for ⚡
+8 Stasis 15⚡ | 9 Glider Gun 60⚡ — more seeds unlock as you level (Q/E cycle, place)
+U genetics lab | Y auto-harvester 40⚡ | Q/E select/place seed
 J field journal | S save code / L load code | B bloom | T day/night
 K minimap | H replay (, / . scrub) | D daily challenge
 Instability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON</div>
@@ -81,6 +82,23 @@ Instability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reac
     <div class="modal-row">
       <button id="load-go-btn" class="modal-btn primary">Load</button>
       <button id="load-close-btn" class="modal-btn">Cancel</button>
+    </div>
+  </div>
+</div>
+
+<!-- ══════════ GENETICS LAB ══════════ -->
+<div id="upgrade-modal" class="modal hidden">
+  <div class="modal-card">
+    <h2>🧬 Genetics Lab</h2>
+    <p class="modal-note"><span id="up-level"></span> — skill points: <b id="up-sp">0</b> · upgrades are permanent and apply to every world you fly</p>
+    <div class="up-row"><div class="up-info"><b>🧬 Vigor</b> <span class="pips" id="up-vigor-pips">○○○</span><br><span class="up-desc" id="up-vigor-desc"></span></div><button class="modal-btn primary" id="up-vigor-btn">Spend 1 SP</button></div>
+    <div class="up-row"><div class="up-info"><b>🌊 Fertility</b> <span class="pips" id="up-fertility-pips">○○○</span><br><span class="up-desc" id="up-fertility-desc"></span></div><button class="modal-btn primary" id="up-fertility-btn">Spend 1 SP</button></div>
+    <div class="up-row"><div class="up-info"><b>💥 Volatility</b> <span class="pips" id="up-volatility-pips">○○○</span><br><span class="up-desc" id="up-volatility-desc"></span></div><button class="modal-btn primary" id="up-volatility-btn">Spend 1 SP</button></div>
+    <div class="up-row"><div class="up-info"><b>🧲 Magnetism</b> <span class="pips" id="up-magnetism-pips">○○○</span><br><span class="up-desc" id="up-magnetism-desc"></span></div><button class="modal-btn primary" id="up-magnetism-btn">Spend 1 SP</button></div>
+    <p class="up-hint">XP comes from discoveries, contracts, explosions witnessed and biomass harvested. Levels 4–10 unlock new seeds: Monsoon, Acorn, Simkin Gun, Area Brush, Big Bang. Discovering a Lightweight Ship in the wild unlocks it as a seed.</p>
+    <div class="modal-row">
+      <button id="upgrade-close-btn" class="modal-btn primary">Done</button>
+      <button id="up-reset" class="modal-btn danger">Reset pilot progress</button>
     </div>
   </div>
 </div>

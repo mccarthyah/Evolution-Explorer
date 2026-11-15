@@ -5,7 +5,9 @@
    chain reactions, debris seeding); oscillators (periods 2-6)
    detonate after 12 cycles.
    Gardener economy: harvest biomass orbs at blast sites, spend on
-   seed tools (4-9), complete contracts. Free-fly + F/G painting.
+   seed tools, complete contracts. Free-fly + F/G painting.
+   Pilot progression: XP, levels, genetics upgrades, seed catalog —
+   persists in localStorage 'evolution-pilot'.
    ════════════════════════════════════════════════════════════════ */
 import * as THREE from 'three';
 import { EffectComposer } from '../lib/postprocessing/EffectComposer.js';
@@ -56,14 +58,41 @@ const GUN_ROWS = [
   '...........O...O....................',
   '............OO......................',
 ];
-const TOOLS = {
-  '4': { name: 'R-pentomino', cost: 5, rows: R_PENTOMINO_ROWS },
-  '5': { name: 'Glider', cost: 10, rows: GLIDER_ROWS },
-  '6': { name: 'Pulsar', cost: 25, rows: PULSAR_ROWS, centered: true },
-  '7': { name: 'Seed Rain', cost: 20, kind: 'rain' },
-  '8': { name: 'Stasis Field', cost: 15, kind: 'stasis' },
-  '9': { name: 'Glider Gun', cost: 60, rows: GUN_ROWS },
-};
+const LWSS_ROWS = ['.O..O', 'O....', 'O...O', 'OOOO.'];
+const ACORN_ROWS = ['.O.....', '...O...', 'OO..OOO'];
+const SIMKIN_ROWS = [
+  'OO.....OO',
+  'OO.....OO',
+  '',
+  '....OO',
+  '....OO',
+  '',
+  '',
+  '',
+  '',
+  '......................O...O',
+  '.....................O....OO',
+  '....................OO.....OO..OO',
+  '.....................OO....O...OO',
+  '......................O',
+];
+/* Seed catalog: keys 4-9 are direct; everything cycles with Q/E (or RB/R3).
+   Unlock: level rewards or journal discoveries. Base six are always yours. */
+const TOOL_CATALOG = [
+  { id: 'rpento', key: '4', name: 'R-pentomino', cost: 5, rows: R_PENTOMINO_ROWS },
+  { id: 'glider', key: '5', name: 'Glider', cost: 10, rows: GLIDER_ROWS },
+  { id: 'pulsar', key: '6', name: 'Pulsar', cost: 25, rows: PULSAR_ROWS, centered: true },
+  { id: 'rain', key: '7', name: 'Seed Rain', cost: 20, kind: 'rain' },
+  { id: 'stasis', key: '8', name: 'Stasis Field', cost: 15, kind: 'stasis' },
+  { id: 'gun', key: '9', name: 'Glider Gun', cost: 60, rows: GUN_ROWS },
+  { id: 'lwss', key: null, name: 'Lightweight Ship', cost: 15, rows: LWSS_ROWS, unlock: { discover: 'Lightweight Ship' } },
+  { id: 'monsoon', key: null, name: 'Monsoon', cost: 30, kind: 'monsoon', unlock: { level: 4 } },
+  { id: 'acorn', key: null, name: 'Acorn', cost: 20, rows: ACORN_ROWS, unlock: { level: 5 } },
+  { id: 'simkin', key: null, name: 'Simkin Gun', cost: 45, rows: SIMKIN_ROWS, unlock: { level: 6 } },
+  { id: 'bigbang', key: null, name: 'Big Bang', cost: 100, kind: 'bigbang', unlock: { level: 10 } },
+];
+const TOOL_BY_KEY = {}; for (const t of TOOL_CATALOG) if (t.key) TOOL_BY_KEY[t.key] = t.id;
+const TOOL_BY_ID = {}; for (const t of TOOL_CATALOG) TOOL_BY_ID[t.id] = t;
 const CONTRACTS = [
   { id: 'collect', text: 'Harvest 15 biomass from blast sites', target: 15, reward: 10 },
   { id: 'paint', text: 'Seed 25 cells with the brush (F)', target: 25, reward: 15 },
@@ -148,6 +177,87 @@ let rngState = null; // null = free random; int = deterministic (daily)
 let dailyMode = false, dailyScored = false;
 let minimapOn = true, minimapTimer = 0;
 const MM_COLORS = ['#26e3ff', '#ff3db8', '#8aff61'];
+
+/* ── Pilot progression: XP, levels, genetics, unlocks (persists) ── */
+const HARVESTER_COST = 40, HARVESTER_MAX = 3, HARVESTER_RADIUS = 12;
+let pilot = {
+  xp: 0, level: 1, sp: 0, areaBrush: false,
+  up: { vigor: 0, fertility: 0, volatility: 0, magnetism: 0 },
+  tools: ['rpento', 'glider', 'pulsar', 'rain', 'stasis', 'gun'],
+};
+let selectedToolIdx = 0;
+function loadPilot() {
+  try {
+    const raw = localStorage.getItem('evolution-pilot');
+    if (!raw) return;
+    const d = JSON.parse(raw);
+    if (!d || d.v !== 1) return;
+    pilot.xp = d.xp | 0; pilot.level = Math.max(1, d.level | 0); pilot.sp = d.sp | 0;
+    if (d.up) for (const k of Object.keys(pilot.up)) pilot.up[k] = Math.min(3, Math.max(0, d.up[k] | 0));
+    if (Array.isArray(d.tools) && d.tools.length) {
+      const base = ['rpento', 'glider', 'pulsar', 'rain', 'stasis', 'gun'];
+      pilot.tools = [...new Set([...base, ...d.tools.filter(id => TOOL_BY_ID[id])])];
+    }
+    pilot.areaBrush = !!d.areaBrush;
+  } catch (e) { }
+}
+function savePilot() {
+  try { localStorage.setItem('evolution-pilot', JSON.stringify(Object.assign({ v: 1 }, pilot))); } catch (e) { }
+}
+function resetPilot() {
+  pilot = {
+    xp: 0, level: 1, sp: 0, areaBrush: false,
+    up: { vigor: 0, fertility: 0, volatility: 0, magnetism: 0 },
+    tools: ['rpento', 'glider', 'pulsar', 'rain', 'stasis', 'gun'],
+  };
+  savePilot();
+}
+function xpForNext() { return 50 + (pilot.level - 1) * 25; }
+function addXP(n) {
+  pilot.xp += n;
+  let leveled = false;
+  while (pilot.xp >= xpForNext()) {
+    pilot.xp -= xpForNext();
+    pilot.level += 1;
+    pilot.sp += 1;
+    leveled = true;
+    checkLevelUnlocks();
+  }
+  if (leveled) {
+    AudioSys.fanfare();
+    toast(`⬆️ <b>PILOT LEVEL ${pilot.level}</b> — +1 skill point (press U to spend)`, 4500, 'gold');
+    savePilot();
+    refreshUpgradeModal();
+  }
+}
+function checkLevelUnlocks() {
+  for (const t of TOOL_CATALOG) {
+    if (t.unlock && t.unlock.level === pilot.level && !pilot.tools.includes(t.id)) {
+      pilot.tools.push(t.id);
+      toast(`🔓 <b>New seed unlocked: ${t.name}</b> (${t.cost}⚡) — Q/E to select`, 5000, 'gold');
+    }
+  }
+  if (pilot.level >= 7 && !pilot.areaBrush) {
+    pilot.areaBrush = true;
+    toast('🔓 <b>Area Brush unlocked</b> — F now stamps 3×3 meadows', 5000, 'gold');
+  }
+}
+function checkDiscoverUnlock(name) {
+  for (const t of TOOL_CATALOG) {
+    if (t.unlock && t.unlock.discover === name && !pilot.tools.includes(t.id)) {
+      pilot.tools.push(t.id);
+      toast(`🔓 <b>New seed unlocked: ${t.name}</b> — discovered in the wild!`, 5000, 'gold');
+      savePilot();
+    }
+  }
+}
+/* Genetics derived values */
+const towerLifespan = () => TOWER_LIFESPAN + 7 * pilot.up.vigor;
+const memoryGain = () => 0.065 * (1 + 0.5 * pilot.up.fertility);
+const orbCount = () => 3 + pilot.up.volatility;
+const orbValue = () => ORB_VALUE + pilot.up.magnetism;
+const collectRadius = () => 2.6 + 0.8 * pilot.up.magnetism;
+function unlockedTools() { return TOOL_CATALOG.filter(t => pilot.tools.includes(t.id)); }
 
 /* ─────────────────────────── AUDIO (light) ──────────────────── */
 const AudioSys = {
@@ -318,7 +428,7 @@ function spawnOrbs(cx, cz, count) {
     const o = orbPool.find(o => !o.active); if (!o) return;
     const angle = Math.random() * Math.PI * 2, dist = 1 + Math.random() * (EXPLOSION_RADIUS - 1);
     o.base.set(w.x + Math.cos(angle) * dist * SPACING, 2.2, w.z + Math.sin(angle) * dist * SPACING);
-    o.active = true; o.ttl = ORB_TTL; o.phase = Math.random() * Math.PI * 2;
+    o.active = true; o.ttl = ORB_TTL; o.phase = Math.random() * Math.PI * 2; o.value = orbValue();
     o.mesh.visible = true; o.mesh.position.copy(o.base); o.mesh.scale.set(1, 1, 1);
   }
 }
@@ -331,8 +441,9 @@ function updateOrbs(dt, time) {
       const s = Math.min(1, Math.max(0.33, o.ttl / 4));
       o.mesh.scale.set(s, s, s);
     }
-    if (camera.position.distanceTo(o.base) < 2.6) {
+    if (camera.position.distanceTo(o.base) < collectRadius() || harvesters.some(h => h.mesh.position.distanceTo(o.base) < HARVESTER_RADIUS)) {
       biomass += o.value; biomassCollectedTotal += o.value;
+      addXP(Math.ceil(o.value / 5));
       AudioSys.blip();
       const now = performance.now();
       if (now - lastOrbToastAt > 1200) { lastOrbToastAt = now; toast(`⚡ <b>+${o.value} biomass</b>`, 1500, 'gold'); }
@@ -365,6 +476,32 @@ function updateStasis() {
     const b = stasisBubbles[i];
     b.gens--;
     if (b.gens <= 0) { scene.remove(b.mesh); b.mesh.material.dispose(); stasisBubbles.splice(i, 1); }
+  }
+}
+
+/* Auto-harvesters: floating collector rings that vacuum nearby orbs */
+const harvesters = [];
+const harvesterGeo = new THREE.TorusGeometry(1.5, 0.28, 10, 28);
+function placeHarvester() {
+  if (historyMode) { AudioSys.err(); toast('⏳ Exit replay (H) first', 2200, 'err'); return; }
+  if (biomass < HARVESTER_COST) { AudioSys.err(); toast(`❌ Auto-harvester costs ${HARVESTER_COST}⚡`, 2200, 'err'); return; }
+  if (harvesters.length >= HARVESTER_MAX) { AudioSys.err(); toast(`❌ Max ${HARVESTER_MAX} harvesters deployed`, 2200, 'err'); return; }
+  const target = aimCell();
+  if (!target) { AudioSys.err(); toast('❌ Aim at the ground to place the harvester', 2200, 'err'); return; }
+  const w = cellWorld(target.x, target.z);
+  const mesh = new THREE.Mesh(harvesterGeo, new THREE.MeshBasicMaterial({ color: 0x53ffb0 }));
+  mesh.position.set(w.x, 5, w.z);
+  mesh.rotation.x = Math.PI / 2;
+  scene.add(mesh);
+  harvesters.push({ mesh, phase: Math.random() * Math.PI * 2 });
+  biomass -= HARVESTER_COST;
+  AudioSys.buy();
+  toast(`🎣 <b>Auto-harvester deployed</b> (-${HARVESTER_COST}⚡) — collects orbs within its ring`, 3500, 'gold');
+}
+function updateHarvesters(dt, time) {
+  for (const h of harvesters) {
+    h.mesh.rotation.z += dt * 1.2;
+    h.mesh.position.y = 5 + Math.sin(h.phase + time * 0.0015) * 0.4;
   }
 }
 
@@ -426,7 +563,7 @@ function stepSimulation() {
     const frozen = inStasis(i % GRID, Math.floor(i / GRID));
     if (current !== 0) {
       ages[i] = old !== 0 ? (frozen ? ages[i] : Math.min(MAX_AGE, ages[i] + 1)) : 1;
-      if (!frozen) history[i] = Math.min(HISTORY_LIMIT, history[i] + 0.065);
+      if (!frozen) history[i] = Math.min(HISTORY_LIMIT, history[i] + memoryGain());
     } else {
       ages[i] = 0;
       if (!frozen) history[i] = Math.max(0, history[i] - 0.012);
@@ -447,11 +584,11 @@ function stepSimulation() {
 function updateInstability() {
   for (let i = 0; i < TOTAL; i++) {
     if (cooldowns[i] > 0) cooldowns[i]--;
-    if (cells[i] !== 0 && ages[i] >= TOWER_LIFESPAN && cooldowns[i] === 0 && !inStasis(i % GRID, Math.floor(i / GRID))) {
+    if (cells[i] !== 0 && ages[i] >= towerLifespan() && cooldowns[i] === 0 && !inStasis(i % GRID, Math.floor(i / GRID))) {
       queue.push([i % GRID, Math.floor(i / GRID)]);
       cooldowns[i] = EXPLOSION_COOLDOWN;
     }
-    if (cells[i] !== 0 && ages[i] >= TOWER_LIFESPAN - 8) warnings[i] = 8;
+    if (cells[i] !== 0 && ages[i] >= towerLifespan() - 8) warnings[i] = 8;
     else if (warnings[i] > 0) warnings[i]--;
   }
   snapshots.push(new Uint8Array(cells));
@@ -499,8 +636,10 @@ function findOscillators() {
     if (jname && !discoveries.has(jname)) {
       discoveries.add(jname);
       biomass += 10; biomassCollectedTotal += 10;
+      addXP(25);
+      checkDiscoverUnlock(jname);
       AudioSys.fanfare();
-      toast(`🔬 <b>DISCOVERED: ${jname}</b> (+10 ⚡)`, 4000, 'gold');
+      toast(`🔬 <b>DISCOVERED: ${jname}</b> (+10 ⚡, +25 XP)`, 4000, 'gold');
       refreshJournal();
     }
     let minX = GRID, minZ = GRID, maxX = 0, maxZ = 0;
@@ -553,7 +692,7 @@ function detonate(cx, cz) {
       const i = idxOf(x, z);
       if (cells[i] !== 0) {
         destroyed++;
-        if (ages[i] >= TOWER_LIFESPAN - 6 && i !== source && cooldowns[i] === 0 && !inStasis(x, z)) queue.push([x, z]);
+        if (ages[i] >= towerLifespan() - 6 && i !== source && cooldowns[i] === 0 && !inStasis(x, z)) queue.push([x, z]);
       }
       cells[i] = 0; ages[i] = 0; warnings[i] = 0;
       history[i] = Math.max(history[i], 0.45);
@@ -582,10 +721,11 @@ function detonate(cx, cz) {
   blasts.push({ x: cx, z: cz, ttl: 0.65 });
   spawnBlastRing(w.x, w.z);
   spawnParticles(w.x, 3, w.z, new THREE.Color(1.0, 0.55, 0.15), 26, 7, 0.8);
-  spawnOrbs(cx, cz, 3);
+  spawnOrbs(cx, cz, orbCount());
   const dist = camera.position.distanceTo(new THREE.Vector3(w.x, 3, w.z));
   shake = Math.min(1.1, Math.max(0.15, 16 / (1 + dist * 0.14)));
   explosionsTotal++;
+  addXP(3);
   lastExplosion = `(${cx},${cz}) cleared ${destroyed}`;
   snapshots = []; tracks = new Map();
   AudioSys.pop(true);
@@ -632,7 +772,7 @@ function updateVisuals(dt) {
     pillarsMesh.setMatrixAt(i, _m);
     if (living > 0) {
       _c.copy(PALETTE[living - 1]).lerp(ORANGE, ageFactor * 0.55);
-      if (ages[i] >= TOWER_LIFESPAN - 8) _c.lerp(REDHOT, 0.65 + 0.35 * Math.sin(generations * 2.0));
+      if (ages[i] >= towerLifespan() - 8) _c.lerp(REDHOT, 0.65 + 0.35 * Math.sin(generations * 2.0));
     } else _c.copy(GHOST_A).lerp(GHOST_B, mem);
     _c.multiplyScalar(worldBrightness);
     pillarsMesh.setColorAt(i, _c);
@@ -687,9 +827,19 @@ function paintAt(clientX, clientY, alive) {
   const z = Math.round(hit.z / SPACING + (GRID - 1) / 2);
   if (x < 0 || x >= GRID || z < 0 || z >= GRID) return;
   const i = idxOf(x, z);
-  cells[i] = alive ? brushSpecies : 0;
-  ages[i] = alive ? 1 : 0;
-  if (alive) paintedCells++;
+  if (alive && pilot.areaBrush) {
+    for (let dz = -1; dz <= 1; dz++) for (let dx = -1; dx <= 1; dx++) {
+      const nx = x + dx, nz = z + dz;
+      if (nx < 0 || nx >= GRID || nz < 0 || nz >= GRID) continue;
+      cells[idxOf(nx, nz)] = brushSpecies;
+      ages[idxOf(nx, nz)] = 1;
+    }
+    paintedCells += 9;
+  } else {
+    cells[i] = alive ? brushSpecies : 0;
+    ages[i] = alive ? 1 : 0;
+    if (alive) paintedCells++;
+  }
   refreshPopulation();
 }
 canvas.addEventListener('contextmenu', e => e.preventDefault());
@@ -712,9 +862,26 @@ function placePattern(rows, ox, oz, species) {
   refreshPopulation();
   return placed;
 }
-function useTool(key) {
+function seedRainAt(target, radius, count) {
+  for (let k = 0; k < count; k++) {
+    const angle = rnd() * Math.PI * 2, dist = rnd() * radius;
+    const x = Math.max(0, Math.min(GRID - 1, target.x + Math.round(Math.cos(angle) * dist)));
+    const z = Math.max(0, Math.min(GRID - 1, target.z + Math.round(Math.sin(angle) * dist)));
+    const i = idxOf(x, z);
+    cells[i] = rnd() < 0.75 ? brushSpecies : rndRange(1, 3);
+    ages[i] = 1;
+  }
+  refreshPopulation();
+}
+function useTool(id) {
+  const tool = TOOL_BY_ID[id];
+  if (!tool) return;
   if (historyMode) { AudioSys.err(); toast('⏳ Exit replay (H) before using tools', 2200, 'err'); return; }
-  const tool = TOOLS[key];
+  if (!pilot.tools.includes(id)) {
+    AudioSys.err();
+    toast(`🔒 <b>${tool.name}</b> is locked — ${tool.unlock && tool.unlock.level ? `reach level ${tool.unlock.level}` : 'discover it in the wild'}`, 2600, 'err');
+    return;
+  }
   if (biomass < tool.cost) {
     AudioSys.err();
     toast(`❌ Not enough biomass for <b>${tool.name}</b> — need ${tool.cost} ⚡`, 2200, 'err');
@@ -734,24 +901,31 @@ function useTool(key) {
     }
     makeStasisBubble(target.x, target.z);
   } else if (tool.kind === 'rain') {
-    for (let k = 0; k < 40; k++) {
-      const angle = rnd() * Math.PI * 2, dist = rnd() * 6;
-      const x = Math.max(0, Math.min(GRID - 1, target.x + Math.round(Math.cos(angle) * dist)));
-      const z = Math.max(0, Math.min(GRID - 1, target.z + Math.round(Math.sin(angle) * dist)));
-      const i = idxOf(x, z);
-      cells[i] = rnd() < 0.75 ? brushSpecies : rndRange(1, 3);
-      ages[i] = 1;
-    }
-    refreshPopulation();
+    seedRainAt(target, 6, 40);
+  } else if (tool.kind === 'monsoon') {
+    seedRainAt(target, 13, 90);
+  } else if (tool.kind === 'bigbang') {
+    placePattern(PULSAR_ROWS, target.x - 6, target.z - 6, brushSpecies);
+    placePattern(ACORN_ROWS, target.x - 12, target.z - 12, 1 + (brushSpecies % 3));
+    placePattern(GLIDER_ROWS, target.x + 6, target.z + 2, brushSpecies);
+    placePattern(GLIDER_ROWS, target.x + 2, target.z + 8, 1 + ((brushSpecies + 1) % 3));
+    seedRainAt(target, 8, 30);
   } else {
     const ox = tool.centered ? target.x - 6 : target.x;
     const oz = tool.centered ? target.z - 6 : target.z;
     placePattern(tool.rows, ox, oz, brushSpecies);
   }
   biomass -= tool.cost;
-  toolsUsed.add(key);
+  toolsUsed.add(id);
   AudioSys.buy();
   toast(`🌱 <b>${tool.name}</b> placed (-${tool.cost} ⚡)`, 2000, 'gold');
+}
+function cycleTool(dir = 1) {
+  const list = unlockedTools();
+  if (!list.length) return;
+  selectedToolIdx = (selectedToolIdx + dir + list.length) % list.length;
+  const t = list[selectedToolIdx];
+  toast(`🧰 <b>${t.name}</b> (${t.cost}⚡) — E to place at screen centre`, 2400);
 }
 
 /* ── Contracts (mirrors main.gd) ── */
@@ -795,6 +969,7 @@ function checkContract() {
   const c = CONTRACTS[contractIndex];
   if (!contractDone(c)) return;
   biomass += c.reward;
+  addXP(30);
   contractIndex++;
   AudioSys.fanfare();
   toast(`✔ <b>CONTRACT COMPLETE</b><br>${c.text} (+${c.reward} ⚡)`, 4200, 'gold');
@@ -838,6 +1013,10 @@ window.addEventListener('keydown', e => {
   else if (k === 'f') paintAt(window.innerWidth / 2, window.innerHeight / 2, true);
   else if (k === 'g') paintAt(window.innerWidth / 2, window.innerHeight / 2, false);
   else if (TOOLS[k]) useTool(k);
+  else if (k === 'q') cycleTool(1);
+  else if (k === 'e') { const list = unlockedTools(); if (list[selectedToolIdx]) useTool(list[selectedToolIdx].id); }
+  else if (k === 'u') { refreshUpgradeModal(); $('upgrade-modal').classList.remove('hidden'); }
+  else if (k === 'y') placeHarvester();
   else if (k === 'b') { bloomEnabled = !bloomEnabled; toast(`✨ Bloom ${bloomEnabled ? 'ON' : 'OFF'}`, 1500); }
   else if (k === 't') { dayNightEnabled = !dayNightEnabled; toast(`🌗 Day/night cycle ${dayNightEnabled ? 'ON' : 'OFF'}`, 1500); }
   else if (k === 'j') { $('journal').classList.toggle('hidden'); refreshJournal(); }
@@ -866,8 +1045,49 @@ function updateHUD() {
   let t =
     `EVOLUTION  /  LIVING TERRAIN\nGeneration ${generations}     Alive ${population}     ${mode}\n${running ? 'RUNNING' : 'PAUSED'}   |   ${(1 / generationInterval).toFixed(1)} gen/sec   |   Height ${heightScale.toFixed(1)}x   |   Memory ${memoryEnabled ? 'ON' : 'OFF'}   |   Brush ${brushSpecies}\nExplosions ${explosionsTotal}  |  Last ${lastExplosion}\n⚡ Biomass ${biomass}   |   🔬 ${discoveries.size}/${JOURNAL.length}   |   Contract ${contractHudText()}`;
   if (historyMode) t += `\n⏳ REPLAY ${historyView + 1}/${historyFrames.length}  —  , / . scrub (Shift ×10)  —  H to return`;
+  const next = xpForNext();
+  const filled = Math.max(0, Math.min(10, Math.round((pilot.xp / next) * 10)));
+  t += `\nLV ${pilot.level} ${'▓'.repeat(filled)}${'░'.repeat(10 - filled)} ${pilot.xp}/${next} XP  ·  SP ${pilot.sp}  ·  🎣 ${harvesters.length}/${HARVESTER_MAX}`;
   $('stats').textContent = t;
 }
+
+/* ── Genetics Lab (upgrade modal) ── */
+const UPGRADE_INFO = [
+  { id: 'vigor', name: 'Vigor', desc: l => `Tower lifespan ${TOWER_LIFESPAN + 7 * l} generations` },
+  { id: 'fertility', name: 'Fertility', desc: l => `Memory gain +${50 * l}% — taller pillars, longer ghosts` },
+  { id: 'volatility', name: 'Volatility', desc: l => `${3 + l} biomass orbs per detonation` },
+  { id: 'magnetism', name: 'Magnetism', desc: l => `Orbs worth ${5 + l}⚡ · collect radius ${(2.6 + 0.8 * l).toFixed(1)}` },
+];
+function refreshUpgradeModal() {
+  const el = $('upgrade-modal');
+  if (!el) return;
+  $('up-sp').textContent = pilot.sp;
+  $('up-level').textContent = `Pilot level ${pilot.level} · ${pilot.xp}/${xpForNext()} XP`;
+  for (const info of UPGRADE_INFO) {
+    const lvl = pilot.up[info.id];
+    $('up-' + info.id + '-pips').textContent = '●'.repeat(lvl) + '○'.repeat(3 - lvl);
+    $('up-' + info.id + '-desc').textContent = info.desc(lvl);
+    const btn = $('up-' + info.id + '-btn');
+    btn.disabled = lvl >= 3 || pilot.sp < 1;
+    btn.textContent = lvl >= 3 ? 'MAXED' : 'Spend 1 SP';
+  }
+}
+function buyUpgrade(id) {
+  if (pilot.sp < 1 || pilot.up[id] >= 3) return;
+  pilot.sp -= 1;
+  pilot.up[id] += 1;
+  AudioSys.buy();
+  const info = UPGRADE_INFO.find(i => i.id === id);
+  toast(`🧬 <b>${info.name} ${pilot.up[id]}</b> — ${info.desc(pilot.up[id])}`, 3200, 'gold');
+  savePilot();
+  refreshUpgradeModal();
+}
+for (const info of UPGRADE_INFO) $('up-' + info.id + '-btn').addEventListener('click', () => buyUpgrade(info.id));
+$('upgrade-close-btn').addEventListener('click', () => $('upgrade-modal').classList.add('hidden'));
+$('up-reset').addEventListener('click', () => {
+  if ($('up-reset').dataset.armed) { resetPilot(); refreshUpgradeModal(); toast('♻️ Pilot progress reset', 2500); }
+  else { $('up-reset').dataset.armed = '1'; $('up-reset').textContent = 'Click again to confirm reset'; setTimeout(() => { delete $('up-reset').dataset.armed; $('up-reset').textContent = 'Reset pilot progress'; }, 2500); }
+});
 
 /* ── Replay history ── */
 function toggleHistory() {
@@ -917,6 +1137,7 @@ function startDaily() {
 }
 function scoreDaily() {
   dailyScored = true;
+  addXP(50);
   const score = population * 3 + biomass + discoveries.size * 25 + explosionsTotal * 5;
   let best = 0;
   try {
@@ -1102,7 +1323,6 @@ $('play-btn').addEventListener('click', startGame);
 
 /* ─────────────────────────── GAMEPAD (Xbox layout — ROG Ally X etc.) ── */
 let gamepadIndex = null, prevPadButtons = [], padTool = 0;
-const TOOL_KEYS = ['4', '5', '6', '7', '8', '9'];
 function padPressed(gp, i) {
   return !!(gp.buttons[i] && gp.buttons[i].pressed) && !(prevPadButtons[i] && prevPadButtons[i].pressed);
 }
@@ -1156,11 +1376,13 @@ function pollGamepad(dt) {
   if (padPressed(gp, 2)) { brushSpecies = brushSpecies % 3 + 1; toast(`🎨 Brush species ${brushSpecies}`, 1400); }
   if (padPressed(gp, 3)) toggleOverview();
   if (padPressed(gp, 5)) {
-    padTool = (padTool + 1) % TOOL_KEYS.length;
-    const t = TOOLS[TOOL_KEYS[padTool]];
-    toast(`🧰 <b>${t.name}</b> (${t.cost}⚡) — R3 to place at screen centre`, 2400);
+    const list = unlockedTools();
+    if (list.length) {
+      padTool = (padTool + 1) % list.length;
+      toast(`🧰 <b>${list[padTool].name}</b> (${list[padTool].cost}⚡) — R3 to place at screen centre`, 2400);
+    }
   }
-  if (padPressed(gp, 11)) useTool(TOOL_KEYS[padTool]);
+  if (padPressed(gp, 11)) { const list = unlockedTools(); if (list[padTool]) useTool(list[padTool].id); }
   if (padPressed(gp, 9)) { if (historyMode) toggleHistory(); else running = !running; }
   if (padPressed(gp, 8)) { AudioSys.setMuted(!AudioSys.muted); $('sound-btn').textContent = AudioSys.muted ? '🔇' : '🔊'; }
   if (padPressed(gp, 12)) toggleHistory();
@@ -1211,6 +1433,7 @@ function loop() {
   updateParticles(dt);
   updateBlasts(dt);
   updateOrbs(dt, nowMs);
+  updateHarvesters(dt, nowMs);
   updateDayNight(dt);
   Drone.update();
   for (let b = blasts.length - 1; b >= 0; b--) {
@@ -1224,6 +1447,7 @@ function loop() {
 }
 
 /* ─────────────────────────── BOOT ───────────────────────────── */
+loadPilot();
 seedWorld();
 biomass = STARTING_BIOMASS;
 loop();

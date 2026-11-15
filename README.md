@@ -2,7 +2,7 @@
 
 **Fly through pillars grown by Conway's Game of Life. Garden it.**
 
-Towers **explode at age 40** — harvest the gold ⚡ **biomass** they leave behind and spend it on seed tools: gliders, pulsars, glider guns, stasis fields. **Discover and catalog 12 named lifeforms** in your field journal. Complete **9 contracts** to become Master Gardener.
+Towers **explode at age 40** — harvest the gold ⚡ **biomass** they leave behind and spend it on seed tools: gliders, pulsars, glider guns, stasis fields. **Discover and catalog 12 named lifeforms** in your field journal. Complete **9 contracts** to become Master Gardener. And your **pilot levels up** as you garden — unlock new seeds, upgrade your genetics, deploy auto-harvesters. Progress saves between sessions (browser localStorage / Godot `user://pilot.cfg`).
 
 ![Godot](https://img.shields.io/badge/Godot-4.7-478cbf) ![Web](https://img.shields.io/badge/Web-Play%20now-22d3ee) ![Three.js](https://img.shields.io/badge/Three.js-r160-e879f9)
 
@@ -42,8 +42,8 @@ A 48×48 Conway B3/S23 world with **3 species** (cyan / magenta / green). Newbor
 
 ### ⚡ Biomass economy
 
-- **Harvest**: every detonation drops **3 gold orbs** (5⚡ each, ~20s before they decay) around the crater — fly through them to collect. Danger pays.
-- **Spend** on seed tools (aim at the ground, keys 4–9):
+- **Harvest**: every detonation drops **3 gold orbs** (5⚡ each, ~20s before they decay) around the crater — fly through them to collect (an auto-harvester can do it for you). Danger pays.
+- **Spend** on seed tools (aim at the ground, keys 4–9, or cycle with `Q`/`E`):
 
 | Key | Tool | Cost | Effect |
 |---|---|---|---|
@@ -53,8 +53,26 @@ A 48×48 Conway B3/S23 world with **3 species** (cyan / magenta / green). Newbor
 | `7` | Seed Rain | 20⚡ | 40 random cells in a radius-6 patch |
 | `8` | Stasis Field | 15⚡ | Freezes aging in a radius-5 bubble for 30 generations — protect towers or delay a detonation |
 | `9` | Glider Gun | 60⚡ | The Gosper gun — endless gliders until it ages out |
+| 🔒 | Lightweight Ship | 15⚡ | c/2 spaceship — **unlock: discover one in the wild** |
+| Lv 4 | Monsoon | 30⚡ | Seed Rain at ×2.5 radius (90 cells) |
+| Lv 5 | Acorn | 20⚡ | The famous 7-cell methuselah — 5,000+ generations of chaos from almost nothing |
+| Lv 6 | Simkin Gun | 45⚡ | 29-cell double-barrelled glider gun (period 120) |
+| Lv 10 | Big Bang | 100⚡ | A curated garden: pulsar + acorn + two glider volleys + seed rain |
 
 - **Contracts** (sequential, shown in the HUD): harvest biomass → seed by hand → witness detonations → balance all 3 species → use 3 tools → **discover 6 lifeforms** → reach 400 population → reach generation 300 → **Master Gardener** (gen 600, 300 alive, 100⚡ harvested). Each pays a biomass bonus.
+
+### 🧬 Pilot progression — levels, genetics & harvesters
+
+Everything you do earns **XP**: **+25** per discovery, **+30** per contract, **+3** per detonation witnessed, **+1 per 5⚡** harvested, **+50** for scoring a daily run. Each level (50, then +25 per level) grants a **skill point** to spend in the **Genetics Lab** (`U`):
+
+| Track | Max | Effect per level |
+|---|---|---|
+| 🧬 Vigor | 3 | Tower lifespan +7 generations (40 → 61) |
+| 🌊 Fertility | 3 | Terrain memory gain +50% — taller pillars, longer ghosts |
+| 💥 Volatility | 3 | +1 biomass orb per detonation (3 → 6) |
+| 🧲 Magnetism | 3 | Orbs worth +1⚡ and collect radius +0.8 |
+
+Level 7 also unlocks the **Area Brush** — `F` stamps a 3×3 meadow instead of a single cell. Press `Y` to deploy an **auto-harvester** (40⚡, max 3): a floating collector ring that vacuums any orb drifting within radius 12. Upgrades apply to every world you fly, in both versions, and persist across sessions.
 
 ### 🔬 Field journal
 
@@ -93,7 +111,7 @@ Xbox-layout pads work natively — including the **ROG Ally X** (put it in **Gam
 | `LB` | Boost |
 | `A` / `B` | Place / erase cell at screen centre |
 | `X` | Cycle brush species |
-| `RB` then `R3` | Cycle seed tool, then place it at screen centre |
+| `RB` then `R3` | Cycle seed tool (unlocked catalog), then place it at screen centre |
 | `Y` | Overview |
 | `Start` | Pause (or exit replay) |
 | `Back` | Mute |
@@ -111,6 +129,9 @@ Xbox-layout pads work natively — including the **ROG Ally X** (put it in **Gam
 | Place / erase cell (screen centre) | `F` / `G` (or click the ground) |
 | Brush species | `1` / `2` / `3` |
 | Seed tools | `4` – `9` (aim at the ground) |
+| Cycle / place seed | `Q` / `E` |
+| Genetics Lab | `U` (web modal · Godot overlay, `1`–`4` to spend SP) |
+| Auto-harvester | `Y` (40⚡) |
 | Overview | `V` |
 | Pause / step | `P` / `N` |
 | Randomize / clear | `R` / `C` |
