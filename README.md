@@ -202,6 +202,19 @@ Evolution-Explorer/
 - Journal matching: connected components are signature-matched against 12 lifeforms in all 4 rotations + mirrors (53 distinct signatures); beacon uses its 8-cell phase because the 6-cell phase splits into two disconnected triominoes.
 - Oscillator detection: board snapshots (last 7) + connected-component footprints; a pattern must repeat exactly at lag 2–6 (and differ at lag 1) for 12 cycles.
 
+## 🧪 Testing
+
+Two Node test suites run against the real shipped code — both must pass before every push:
+
+```bash
+node tools/boot-test.mjs --selftest   # boot test (+ proves it catches the TDZ bug class)
+node tools/logic-test.mjs             # simulation/world-engine logic
+```
+
+- **`tools/boot-test.mjs`** imports the actual `js/main.js` in its real declaration order inside a stubbed browser (DOM, canvas, localStorage, gamepad — no WebGL, no AudioContext) and drives it through *Start Playing*, world switching, and animation frames. This is the regression test for the v8 incident where a `const` referenced above its declaration threw at module load and silently killed the play button — `node --check` passes such code, only a true import catches it. `--selftest` re-creates that exact bug and verifies the test fails on it.
+- **`tools/logic-test.mjs`** extracts the simulation core verbatim from `js/main.js` and asserts the world engine: rule masks, glider parity between Life and HighLife, Replicator cloning (12→24→48 cells every 12 gens), world-gen densities, per-world tower lifespans, crystal growth + mining, and same-seed determinism.
+
+
 ---
 
 *Built with 🧬 — go grow something alive.*

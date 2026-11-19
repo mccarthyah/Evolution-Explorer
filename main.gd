@@ -53,6 +53,7 @@ const STASIS_RADIUS: int = 5
 const STASIS_GENS: int = 30
 const STARTING_BIOMASS: int = 20
 const LWSS_ROWS: Array = [".O..O", "O....", "O...O", "OOOO."]
+const REPLICATOR_ROWS: Array = ["..OOO", ".O..O", "O...O", "O..O.", "OOO."]
 const ACORN_ROWS: Array = [".O.....", "...O...", "OO..OOO"]
 const SIMKIN_ROWS: Array = [
 	"OO.....OO",
@@ -215,7 +216,6 @@ var fires_out: int = 0
 var last_record_toast_ms: int = 0
 
 # ── v8 New Worlds: generalized Life-like rule engine ──
-const REPLICATOR_ROWS: Array = ["..OOO", ".O..O", "O...O", "O..O.", "OOO."]
 var WORLDS: Array = [
 	{"id": "life", "name": "Life", "bs": "B3/S23", "patches": 16, "radius": [3, 8], "density": 0.34, "tower": 40,
 		"desc": "the classic home world"},

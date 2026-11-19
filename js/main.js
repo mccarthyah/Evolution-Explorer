@@ -59,6 +59,7 @@ const GUN_ROWS = [
   '............OO......................',
 ];
 const LWSS_ROWS = ['.O..O', 'O....', 'O...O', 'OOOO.'];
+const REPLICATOR_ROWS = ['..OOO', '.O..O', 'O...O', 'O..O.', 'OOO.'];
 const ACORN_ROWS = ['.O.....', '...O...', 'OO..OOO'];
 const SIMKIN_ROWS = [
   'OO.....OO',
@@ -183,7 +184,6 @@ const MM_COLORS = ['#26e3ff', '#ff3db8', '#8aff61'];
 /* ── v8 New Worlds: generalized Life-like rule engine ──
    A world = B/S rule + seed style + tower pacing. Rule masks are bitmasks over
    neighbour counts (bit n set = that count triggers birth/survival). */
-const REPLICATOR_ROWS = ['..OOO', '.O..O', 'O...O', 'O..O.', 'OOO.'];
 const _bsMask = s => [...s].reduce((m, c) => m | (1 << (+c)), 0);
 const WORLDS = [
   { id: 'life', name: 'Life', bs: 'B3/S23', patches: 16, radius: [3, 8], density: 0.34, tower: 40,
