@@ -1450,13 +1450,20 @@ func encode_ecosystem() -> String:
 	return "EVO1;%d;%s" % [GRID, "/".join(rows)]
 
 func decode_ecosystem(code: String) -> bool:
-	var parts: PackedStringArray = code.strip_edges().split(";", false)
+	var parts: PackedStringArray = code.strip_edges().split(";", true)
 	if parts.size() != 3 or parts[0] != "EVO1":
+		return false
+	if parts[1].is_empty():
+		return false
+	for ch in parts[1]:
+		if ch < "0" or ch > "9":
+			return false
+	if not parts[1].is_valid_int():
 		return false
 	var n_grid: int = int(parts[1])
 	if n_grid < 8 or n_grid > GRID:
 		return false
-	var rows: PackedStringArray = parts[2].split("/", false)
+	var rows: PackedStringArray = parts[2].split("/", true)
 	if rows.size() != n_grid:
 		return false
 	var src: PackedByteArray = PackedByteArray()
@@ -1481,7 +1488,7 @@ func decode_ecosystem(code: String) -> bool:
 				return false
 			for k in range(n):
 				src[z * n_grid + x + k] = v
-				x += n
+			x += n
 		if x != n_grid:
 			return false
 	var decoded: PackedByteArray = PackedByteArray()

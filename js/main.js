@@ -1499,8 +1499,9 @@ function encodeEcosystem() {
 function decodeEcosystem(code) {
   const parts = code.trim().split(';');
   if (parts.length !== 3 || parts[0] !== 'EVO1') return null;
-  const n = parseInt(parts[1], 10);
-  if (!n || n < 8 || n > GRID) return null; /* legacy smaller grids load centred */
+  if (!/^\d+$/.test(parts[1])) return null;
+  const n = Number(parts[1]);
+  if (!Number.isInteger(n) || n < 8 || n > GRID) return null; /* legacy smaller grids load centred */
   const rows = parts[2].split('/');
   if (rows.length !== n) return null;
   const src = new Uint8Array(n * n);

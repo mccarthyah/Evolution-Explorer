@@ -236,6 +236,17 @@ try {
   check('T9 losing focus releases held controls', game.getKeys().size === 0);
 } catch (e) { check('keyboard regression tests', false, e.stack); }
 
+// Import validates the complete format and preserves legacy centered grids.
+try {
+  const rows = ['a1.7', ...Array(7).fill('.8')].join('/');
+  const decoded = game.decodeEcosystem('EVO1;8;' + rows);
+  const roundtrip = game.decodeEcosystem(game.encodeEcosystem());
+  check('ecosystem code round trips', roundtrip && roundtrip.every((cell, i) => cell === game.getCells()[i]));
+  check('legacy ecosystem is centred', decoded && decoded[28 * 64 + 28] === 1 && decoded.reduce((a, b) => a + b, 0) === 1);
+  for (const bad of ['EVO1;8junk;' + rows, 'EVO1;+8;' + rows, 'EVO1;8;' + rows + '/', 'EVO1;;8;' + rows, 'EVO1;8;a9/' + Array(7).fill('.8').join('/')])
+    check('reject malformed ecosystem ' + bad.slice(0, 16), game.decodeEcosystem(bad) === null);
+} catch (e) { check('ecosystem import regression tests', false, e.stack); }
+
 // Test actual persistence functions and a generation, without exposing game internals in production.
 try {
   game.resetPilot();
@@ -276,7 +287,7 @@ function buildDir(docoredSrc) {
   writeFileSync(join(dir, 'node_modules/three/index.mjs'), THREE_STUB);
   for (const [name, body] of [['EffectComposer', POST_STUB], ['RenderPass', POST_STUB], ['UnrealBloomPass', POST_STUB]])
     writeFileSync(join(dir, 'lib/postprocessing/' + name + '.js'), body);
-  writeFileSync(join(dir, 'js/main.mjs'), docoredSrc + `\nexport { resetPilot, addXP, loadPilot, stepSimulation };\nexport const getPilot = () => pilot;\nexport const getKeys = () => keys;\nexport const getToolsUsed = () => toolsUsed;\nexport const isDaily = () => dailyMode;\nexport function setupStableBlock() { activeWorld = WORLDS_BY_ID.life; cells.fill(0); ages.fill(0); for (const i of [0, 1, GRID, GRID + 1]) cells[i] = 1; }\n`);
+  writeFileSync(join(dir, 'js/main.mjs'), docoredSrc + `\nexport { resetPilot, addXP, loadPilot, stepSimulation, encodeEcosystem, decodeEcosystem };\nexport const getPilot = () => pilot;\nexport const getCells = () => cells;\nexport const getKeys = () => keys;\nexport const getToolsUsed = () => toolsUsed;\nexport const isDaily = () => dailyMode;\nexport function setupStableBlock() { activeWorld = WORLDS_BY_ID.life; cells.fill(0); ages.fill(0); for (const i of [0, 1, GRID, GRID + 1]) cells[i] = 1; }\n`);
   writeFileSync(join(dir, 'run.mjs'), RUNNER);
   return dir;
 }

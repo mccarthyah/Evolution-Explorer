@@ -51,6 +51,14 @@ func run_tests() -> void:
 		for point in [Vector2i(32, 31), Vector2i(33, 32), Vector2i(31, 33), Vector2i(32, 33), Vector2i(33, 33)]:
 			expected_cells[game.index_of(point.x, point.y)] = 1
 		check("glider travels one cell in " + id, game.cells == expected_cells)
+	var rows: String = "a1.7/" + "/".join([".8", ".8", ".8", ".8", ".8", ".8", ".8"])
+	var full_code: String = game.encode_ecosystem()
+	var previous: PackedByteArray = game.cells.duplicate()
+	check("ecosystem code round trips", game.decode_ecosystem(full_code) and game.cells == previous)
+	check("legacy ecosystem is centred", game.decode_ecosystem("EVO1;8;" + rows) and game.cells[game.index_of(28, 28)] == 1 and game.population == 1)
+	previous = game.cells.duplicate()
+	for bad in ["EVO1;8junk;" + rows, "EVO1;+8;" + rows, "EVO1;8;" + rows + "/", "EVO1;;8;" + rows, "EVO1;8;a9/" + "/".join([".8", ".8", ".8", ".8", ".8", ".8", ".8"])]:
+		check("reject malformed ecosystem: " + bad.substr(0, 16), not game.decode_ecosystem(bad) and game.cells == previous)
 	game.pilot["xp"] = 0
 	game.pilot["level"] = 1
 	game.aurora_ttl = 0
