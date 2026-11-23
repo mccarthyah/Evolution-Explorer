@@ -63,8 +63,10 @@ jobs:
             while IFS= read -r line; do echo "::error::$line"; done < "$RUNNER_TEMP/check.log"
             exit 1
           fi
-          timeout 90s "$godot" --headless --path . --quit-after 120 2>&1 | tee "$RUNNER_TEMP/godot.log"
-          if grep -E '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$RUNNER_TEMP/godot.log"; then
-            echo 'Godot reported errors during startup.' >&2
+          status=0
+          timeout 90s "$godot" --headless --path . --quit-after 120 > "$RUNNER_TEMP/godot.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/godot.log"
+          if [ "$status" -ne 0 ] || grep -qE '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$RUNNER_TEMP/godot.log"; then
+            while IFS= read -r line; do echo "::error::$line"; done < "$RUNNER_TEMP/godot.log"
             exit 1
           fi
