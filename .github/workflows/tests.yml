@@ -1,0 +1,22 @@
+name: Tests
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  node-tests:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Boot and persistence regression tests
+        run: node tools/boot-test.mjs --selftest
+      - name: Simulation logic tests
+        run: node tools/logic-test.mjs
