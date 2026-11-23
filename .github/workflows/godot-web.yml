@@ -1,0 +1,80 @@
+name: Godot Web Preview
+
+on:
+  workflow_dispatch:
+  push:
+    paths:
+      - main.gd
+      - main.tscn
+      - project.godot
+      - export_presets.cfg
+      - .github/workflows/godot-web.yml
+  pull_request:
+    paths:
+      - main.gd
+      - main.tscn
+      - project.godot
+      - export_presets.cfg
+      - .github/workflows/godot-web.yml
+
+permissions:
+  contents: read
+
+jobs:
+  export:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache official Godot
+        id: godot
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/evolution-godot/4.7.2
+          key: godot-4.7.2-stable-linux-x86_64-cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4
+      - name: Download official Godot
+        if: steps.godot.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip -o "$RUNNER_TEMP/godot.zip"
+          echo "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  $RUNNER_TEMP/godot.zip" | sha256sum -c -
+          mkdir -p "$HOME/.cache/evolution-godot/4.7.2"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$HOME/.cache/evolution-godot/4.7.2"
+      - name: Cache Web export templates
+        id: templates
+        uses: actions/cache@v4
+        with:
+          path: ~/.local/share/godot/export_templates/4.7.2.stable
+          key: godot-4.7.2-stable-web-templates-f298490b8d44d934
+      - name: Download official export templates
+        if: steps.templates.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          curl -fsSL --retry 3 https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_export_templates.tpz -o "$RUNNER_TEMP/templates.tpz"
+          echo "f298490b8d44d934be425a5a65a51bf15f422428b229a06a6e11d9ffea248011  $RUNNER_TEMP/templates.tpz" | sha256sum -c -
+          mkdir -p "$HOME/.local/share/godot/export_templates/4.7.2.stable"
+          unzip -j -q "$RUNNER_TEMP/templates.tpz" 'templates/web_*' -d "$HOME/.local/share/godot/export_templates/4.7.2.stable"
+      - name: Export Godot project to Web
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot="$HOME/.cache/evolution-godot/4.7.2/Godot_v4.7.2-stable_linux.x86_64"
+          mkdir -p build/godot-web
+          "$godot" --headless --path . --editor --import
+          if ! "$godot" --headless --path . --export-release 'Web Preview' build/godot-web/index.html > "$RUNNER_TEMP/export.log" 2>&1; then
+            cat "$RUNNER_TEMP/export.log"
+            while IFS= read -r line; do echo "::error::$line"; done < "$RUNNER_TEMP/export.log"
+            exit 1
+          fi
+          cat "$RUNNER_TEMP/export.log"
+          test -s build/godot-web/index.html
+          test -s build/godot-web/index.wasm
+          test -s build/godot-web/index.pck
+      - name: Upload interactive Web build
+        uses: actions/upload-artifact@v4
+        with:
+          name: godot-web-preview
+          path: build/godot-web/
+          if-no-files-found: error
+          retention-days: 7
