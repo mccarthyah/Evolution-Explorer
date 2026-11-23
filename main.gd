@@ -956,13 +956,13 @@ func _unhandled_input(event: InputEvent) -> void:
 				running = not running
 			KEY_N:
 				if not running: step_simulation()
-		KEY_R:
-			daily_mode = false
-			rng_state = -1
-			active_world = worlds_by_id[selected_world_id]
-			seed_world()
-		KEY_0:
-			cycle_world()
+			KEY_R:
+				daily_mode = false
+				rng_state = -1
+				active_world = worlds_by_id[selected_world_id]
+				seed_world()
+			KEY_0:
+				cycle_world()
 			KEY_C:
 				for i in range(TOTAL):
 					cells[i] = 0
