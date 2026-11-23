@@ -8,7 +8,7 @@
 // then clicks START and runs animation frames.
 //
 // Usage:
-//   node tools/boot-test.mjs             → must print 11/11 and exit 0
+//   node tools/boot-test.mjs             → must pass all checks and exit 0
 //   node tools/boot-test.mjs --selftest  → additionally re-creates the original
 //                                          v8 TDZ bug and proves this test fails on it
 import { readFileSync, writeFileSync, mkdirSync, copyFileSync, mkdtempSync } from 'fs';
@@ -141,7 +141,8 @@ globalThis.innerHeight = 720;
 globalThis.devicePixelRatio = 1;
 globalThis.window.addEventListener = () => {};
 // NOTE: window.AudioContext deliberately absent — audio paths are guarded and must no-op
-globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+const storage = new Map();
+globalThis.localStorage = { getItem: key => storage.get(key) ?? null, setItem(key, value) { storage.set(key, String(value)); }, removeItem(key) { storage.delete(key); } };
 try {
   Object.defineProperty(globalThis, 'navigator', { value: { getGamepads: () => [] }, configurable: true });
 } catch (e) { /* keep Node's navigator */ }
@@ -154,8 +155,9 @@ const check = (name, cond, extra = '') => {
 };
 
 // T1: the module loads without any exception — the exact failure class of the v8 incident
+let game;
 try {
-  await import('./js/main.mjs');
+  game = await import('./js/main.mjs');
   check('T1 module loads (no TDZ / load-time error)', true);
 } catch (e) {
   check('T1 module loads (no TDZ / load-time error)', false, e.message);
@@ -199,6 +201,33 @@ try {
 } catch (e) {
   check('T8 second frame runs clean', false, e.message); }
 
+// Test actual persistence functions and a generation, without exposing game internals in production.
+try {
+  game.resetPilot();
+  game.addXP(7);
+  check('T9 XP below level threshold is saved', JSON.parse(storage.get('evolution-pilot')).xp === 7);
+  game.resetPilot();
+  storage.set('evolution-pilot', JSON.stringify({v: 1, xp: 7, level: 1, sp: 0}));
+  game.loadPilot();
+  check('T9 saved XP reloads', game.getPilot().xp === 7);
+  game.addXP(43);
+  const leveled = JSON.parse(storage.get('evolution-pilot'));
+  check('T9 level and remaining XP save together', leveled.level === 2 && leveled.xp === 0);
+  game.resetPilot();
+  game.setupStableBlock();
+  game.stepSimulation();
+  check('T10 tallest tower record is saved', JSON.parse(storage.get('evolution-pilot')).rec.tallestTower === 1);
+  game.resetPilot();
+  storage.set('evolution-pilot', JSON.stringify({v: 1, xp: 0, level: 1, sp: 0, rec: {tallestTower: 1}}));
+  game.loadPilot();
+  check('T10 tower record reloads', game.getPilot().rec.tallestTower === 1);
+  const originalSet = localStorage.setItem;
+  localStorage.setItem = () => { throw new Error('storage unavailable'); };
+  game.addXP(1);
+  localStorage.setItem = originalSet;
+  check('T11 unavailable storage does not interrupt progression', game.getPilot().xp === 1);
+} catch (e) { check('persistence regression tests', false, e.stack); }
+
 console.log('\\nRESULT: ' + pass + ' passed, ' + fail + ' failed');
 process.exit(fail ? 1 : 0);
 `;
@@ -212,7 +241,7 @@ function buildDir(docoredSrc) {
   writeFileSync(join(dir, 'node_modules/three/index.mjs'), THREE_STUB);
   for (const [name, body] of [['EffectComposer', POST_STUB], ['RenderPass', POST_STUB], ['UnrealBloomPass', POST_STUB]])
     writeFileSync(join(dir, 'lib/postprocessing/' + name + '.js'), body);
-  writeFileSync(join(dir, 'js/main.mjs'), docoredSrc);
+  writeFileSync(join(dir, 'js/main.mjs'), docoredSrc + `\nexport { resetPilot, addXP, loadPilot, stepSimulation };\nexport const getPilot = () => pilot;\nexport function setupStableBlock() { activeWorld = WORLDS_BY_ID.life; cells.fill(0); ages.fill(0); for (const i of [0, 1, GRID, GRID + 1]) cells[i] = 1; }\n`);
   writeFileSync(join(dir, 'run.mjs'), RUNNER);
   return dir;
 }

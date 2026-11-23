@@ -494,6 +494,7 @@ func step_simulation() -> void:
 					var dom: int = DOMINATOR[living - 1]
 					if votes[dom - 1] >= 3:
 						next_cells[i] = dom
+	var previous_tallest_tower: int = int(pilot["rec"]["tallestTower"])
 	for i in range(TOTAL):
 		var old: int = int(cells[i])
 		var current: int = int(next_cells[i])
@@ -512,6 +513,8 @@ func step_simulation() -> void:
 			ages[i] = 0
 			if not frozen:
 				history[i] = maxf(0.0, history[i] - 0.012)
+	if int(pilot["rec"]["tallestTower"]) > previous_tallest_tower:
+		save_pilot()
 	generations += 1
 	# v7 weather & events (seeded rnd → daily runs share the same weather).
 	if pollen_gens > 0:
@@ -1695,8 +1698,8 @@ func add_xp(n: int) -> void:
 		check_level_unlocks()
 	if leveled:
 		show_banner("⬆️ PILOT LEVEL %d — +1 skill point (U to spend)" % int(pilot["level"]), Color(1.0, 0.85, 0.3))
-		save_pilot()
 		refresh_upgrade_label()
+	save_pilot()
 
 func check_level_unlocks() -> void:
 	for tool in TOOL_CATALOG:

@@ -266,9 +266,9 @@ function addXP(n) {
   if (leveled) {
     AudioSys.fanfare();
     toast(`⬆️ <b>PILOT LEVEL ${pilot.level}</b> — +1 skill point (press U to spend)`, 4500, 'gold');
-    savePilot();
     refreshUpgradeModal();
   }
+  savePilot();
 }
 function checkLevelUnlocks() {
   for (const t of TOOL_CATALOG) {
@@ -738,6 +738,7 @@ function stepSimulation() {
       }
     }
   }
+  const previousTallestTower = pilot.rec.tallestTower;
   for (let i = 0; i < TOTAL; i++) {
     const old = cells[i], current = nextCells[i];
     cells[i] = current;
@@ -751,6 +752,7 @@ function stepSimulation() {
       if (!frozen) history[i] = Math.max(0, history[i] - 0.012);
     }
   }
+  if (pilot.rec.tallestTower > previousTallestTower) savePilot();
   generations++;
   /* v7 weather & events (seeded rnd → daily runs share the same weather) */
   if (pollenGens > 0) pollenGens--;
