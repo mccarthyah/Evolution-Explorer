@@ -1188,9 +1188,13 @@ function contractHudText() {
 /* ─────────────────────────── INPUT ──────────────────────────── */
 window.addEventListener('keydown', e => {
   const k = e.key.toLowerCase();
+  const tag = e.target && e.target.tagName;
+  if (!started || (e.target && e.target.isContentEditable) || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(tag) ||
+      ['save-modal', 'load-modal', 'upgrade-modal'].some(id => !$(id).classList.contains('hidden'))) return;
+  if ((e.ctrlKey && k !== 'control') || e.metaKey || e.altKey) return;
   if (['arrowup', 'arrowdown', 'arrowleft', 'arrowright', ' '].includes(k)) e.preventDefault();
   keys.add(k);
-  if (!started) return;
+  if (e.repeat) return;
   if (historyMode) {
     if (k === ',') scrubHistory(e.shiftKey ? -10 : -1);
     else if (k === '.') scrubHistory(e.shiftKey ? 10 : 1);
@@ -1226,21 +1230,22 @@ window.addEventListener('keydown', e => {
   else if (k === '1' || k === '2' || k === '3') brushSpecies = +k;
   else if (k === 'f') paintAt(window.innerWidth / 2, window.innerHeight / 2, true);
   else if (k === 'g') paintAt(window.innerWidth / 2, window.innerHeight / 2, false);
-  else if (TOOLS[k]) useTool(k);
+  else if (['4', '5', '6', '7', '8', '9'].includes(k)) useTool(['rpento', 'glider', 'pulsar', 'rain', 'stasis', 'gun'][Number(k) - 4]);
   else if (k === 'q') cycleTool(1);
   else if (k === 'e') { const list = unlockedTools(); if (list[selectedToolIdx]) useTool(list[selectedToolIdx].id); }
-  else if (k === 'u') { refreshUpgradeModal(); $('upgrade-modal').classList.remove('hidden'); }
+  else if (k === 'u') { keys.clear(); refreshUpgradeModal(); $('upgrade-modal').classList.remove('hidden'); }
   else if (k === 'y') placeHarvester();
   else if (k === 'b') { bloomEnabled = !bloomEnabled; toast(`✨ Bloom ${bloomEnabled ? 'ON' : 'OFF'}`, 1500); }
   else if (k === 't') { dayNightEnabled = !dayNightEnabled; toast(`🌗 Day/night cycle ${dayNightEnabled ? 'ON' : 'OFF'}`, 1500); }
   else if (k === 'j') { $('journal').classList.toggle('hidden'); refreshJournal(); }
-  else if (k === 's') openSaveModal();
+  else if (k === 'x') openSaveModal();
   else if (k === 'l') openLoadModal();
   else if (k === 'h') toggleHistory();
   else if (k === 'k') { minimapOn = !minimapOn; $('minimap').classList.toggle('hidden', !minimapOn); }
-  else if (k === 'd') startDaily();
+  else if (k === 'z') startDaily();
 });
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
+window.addEventListener('blur', () => keys.clear());
 function toggleOverview() {
   overview = !overview;
   if (overview) { camera.position.set(0, 105, 72); yaw = 0; pitch = -0.95; }
@@ -1521,8 +1526,8 @@ function decodeEcosystem(code) {
   for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) out[idxOf(x + off, z + off)] = src[z * n + x];
   return out;
 }
-function openSaveModal() { $('save-area').value = encodeEcosystem(); $('save-modal').classList.remove('hidden'); $('save-area').select(); }
-function openLoadModal() { $('load-area').value = ''; $('load-modal').classList.remove('hidden'); $('load-area').focus(); }
+function openSaveModal() { keys.clear(); $('save-area').value = encodeEcosystem(); $('save-modal').classList.remove('hidden'); $('save-area').select(); }
+function openLoadModal() { keys.clear(); $('load-area').value = ''; $('load-modal').classList.remove('hidden'); $('load-area').focus(); }
 function loadFromModal() {
   const arr = decodeEcosystem($('load-area').value);
   if (!arr) { AudioSys.err(); toast('❌ Invalid ecosystem code (expected EVO1)', 2500, 'err'); return; }
@@ -1557,7 +1562,7 @@ function startGame() {
   refreshJournal();
   toast('🧬 Welcome, Gardener. Harvest gold orbs at blast sites to earn ⚡ biomass.', 4500);
   toast('Contracts pay bonuses. Tools are on keys 4–9 (aim at the ground).', 4500);
-  toast('🔬 J journal · S/L save & share ecosystems · B bloom · T day/night', 5000);
+  toast('🔬 J journal · X/L save & share ecosystems · B bloom · T day/night', 5000);
   if (gamepadIndex !== null) toast('🎮 Controller: sticks fly · RT/LT rise/fall · LB boost · A/B paint', 5000);
 }
 $('play-btn').addEventListener('click', startGame);

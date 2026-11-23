@@ -115,7 +115,7 @@ Press `J` to open the journal. Explosions scatter gliders and blocks as debris, 
 
 ### 💾 Save & share ecosystems
 
-Press `S` for a compact **EVO1 code** (run-length encoded, species included) — web copies it to your clipboard with a share modal; Godot puts it on the clipboard directly. Anyone can press `L` and paste it to take over your exact world. Codes from the older 48×48 version still load — they're centred in the bigger field.
+Press `X` for a compact **EVO1 code** (run-length encoded, species included) — web copies it to your clipboard with a share modal; Godot puts it on the clipboard directly. Anyone can press `L` and paste it to take over your exact world. Codes from the older 48×48 version still load — they're centred in the bigger field.
 
 > **v7.1 "Open Skies"** grew the field from 48×48 to **64×64**, slimmed the pillars (~20% narrower), and dropped world-gen density from ~30% to ~12% — same lively ecosystems, far more sky between them. Ghost-memory pillars are also slightly shorter so dead terrain reads as quiet ground rather than clutter.
 
@@ -123,7 +123,7 @@ Press `S` for a compact **EVO1 code** (run-length encoded, species included) —
 
 - **Minimap** (`K`) — live species territories, ghost memory, stasis bubbles, and your position + heading, bottom-right
 - **Replay** (`H`) — rewinds through the last **100 generations**; scrub with `,` / `.` (Shift ×10) or the slider (web). Sim pauses, the world dims, and you can watch explosions unfold backwards and forwards. Great for seeing how a territory war actually happened
-- **Daily challenge** (`D`) — a date-derived seed generates the **same starting world for everyone playing that day**, and the same weather events too. At generation 300 your run is scored: `alive×3 + biomass + discoveries×25 + explosions×5`. Personal bests persist (browser localStorage / Godot `user://daily.cfg`), and consecutive scored days build a **streak** (+1 SP every 3 days). Press `R` to return to free mode
+- **Daily challenge** (`Z`) — a date-derived seed generates the **same starting world for everyone playing that day**, and the same weather events too. At generation 300 your run is scored: `alive×3 + biomass + discoveries×25 + explosions×5`. Personal bests persist (browser localStorage / Godot `user://daily.cfg`), and consecutive scored days build a **streak** (+1 SP every 3 days). Press `R` to return to free mode
 
 ### ✨ Atmosphere
 
@@ -173,12 +173,12 @@ Xbox-layout pads work natively — including the **ROG Ally X** (put it in **Gam
 | Height scale | `-` / `=` |
 | Terrain memory | `M` |
 | Field journal | `J` |
-| Save / load ecosystem code | `S` / `L` |
+| Save / load ecosystem code | `X` / `L` |
 | Bloom toggle | `B` |
 | Day/night cycle | `T` |
 | Minimap | `K` |
 | Replay history | `H`, scrub `,` / `.` (Shift ×10) |
-| Daily challenge | `D` (back to free mode: `R`) |
+| Daily challenge | `Z` (back to free mode: `R`) |
 | Quit (Godot) / pause (web) | `Esc` |
 
 ## 📁 Project structure

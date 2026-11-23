@@ -79,7 +79,7 @@ class WebGLRenderer {
 }
 const MathUtils = { clamp: (v, a, b) => Math.min(b, Math.max(a, v)) };
 class Raycaster {
-  constructor() { this.ray = { direction: new Vector3(), origin: new Vector3() }; }
+  constructor() { this.ray = { direction: new Vector3(), origin: new Vector3(), intersectPlane(plane, hit) { return hit.set(0, 0, 0); } }; }
   setFromCamera(ndc, cam) { return this; }
   intersectObject(obj) { return []; }
   intersectObjects(arr) { return []; }
@@ -139,7 +139,14 @@ globalThis.window = globalThis;
 globalThis.innerWidth = 1280;
 globalThis.innerHeight = 720;
 globalThis.devicePixelRatio = 1;
-globalThis.window.addEventListener = () => {};
+const windowListeners = {};
+globalThis.window.addEventListener = (type, fn) => { (windowListeners[type] ||= []).push(fn); };
+function key(type, value, options = {}) {
+  const e = { key: value, target: { tagName: 'BODY' }, preventDefault() { this.prevented = true; }, ...options };
+  for (const fn of windowListeners[type] || []) fn(e);
+  return e;
+}
+for (const id of ['save-modal', 'load-modal', 'upgrade-modal']) document.getElementById(id).classList.add('hidden');
 // NOTE: window.AudioContext deliberately absent — audio paths are guarded and must no-op
 const storage = new Map();
 globalThis.localStorage = { getItem: key => storage.get(key) ?? null, setItem(key, value) { storage.set(key, String(value)); }, removeItem(key) { storage.delete(key); } };
@@ -201,6 +208,34 @@ try {
 } catch (e) {
   check('T8 second frame runs clean', false, e.message); }
 
+// Flight keys must not activate save/daily shortcuts; editable UI must keep normal keys.
+try {
+  key('keydown', 's');
+  check('T9 S flies without opening save', game.getKeys().has('s') && els.get('save-modal').classList.contains('hidden'));
+  key('keyup', 's');
+  key('keydown', 'd');
+  check('T9 D flies without starting daily', game.getKeys().has('d') && !game.isDaily());
+  key('keyup', 'd');
+  key('keydown', '4');
+  key('keyup', '4');
+  key('keydown', '5');
+  key('keyup', '5');
+  check('T9 number keys place their mapped seed tools', game.getToolsUsed().has('rpento') && game.getToolsUsed().has('glider'));
+  key('keydown', 'x');
+  check('T9 X opens save', !els.get('save-modal').classList.contains('hidden'));
+  check('T9 opening modal clears held flight keys', game.getKeys().size === 0);
+  els.get('save-close-btn').click();
+  key('keydown', 'z');
+  check('T9 Z starts daily', game.isDaily());
+  key('keyup', 'z');
+  const typed = key('keydown', ' ', { target: { tagName: 'TEXTAREA' } });
+  check('T9 editable fields keep spaces and suppress flight', !typed.prevented && !game.getKeys().has(' '));
+  key('keydown', 'Control', {ctrlKey: true});
+  check('T9 Control still enables descent', game.getKeys().has('control'));
+  for (const fn of windowListeners.blur || []) fn();
+  check('T9 losing focus releases held controls', game.getKeys().size === 0);
+} catch (e) { check('keyboard regression tests', false, e.stack); }
+
 // Test actual persistence functions and a generation, without exposing game internals in production.
 try {
   game.resetPilot();
@@ -241,7 +276,7 @@ function buildDir(docoredSrc) {
   writeFileSync(join(dir, 'node_modules/three/index.mjs'), THREE_STUB);
   for (const [name, body] of [['EffectComposer', POST_STUB], ['RenderPass', POST_STUB], ['UnrealBloomPass', POST_STUB]])
     writeFileSync(join(dir, 'lib/postprocessing/' + name + '.js'), body);
-  writeFileSync(join(dir, 'js/main.mjs'), docoredSrc + `\nexport { resetPilot, addXP, loadPilot, stepSimulation };\nexport const getPilot = () => pilot;\nexport function setupStableBlock() { activeWorld = WORLDS_BY_ID.life; cells.fill(0); ages.fill(0); for (const i of [0, 1, GRID, GRID + 1]) cells[i] = 1; }\n`);
+  writeFileSync(join(dir, 'js/main.mjs'), docoredSrc + `\nexport { resetPilot, addXP, loadPilot, stepSimulation };\nexport const getPilot = () => pilot;\nexport const getKeys = () => keys;\nexport const getToolsUsed = () => toolsUsed;\nexport const isDaily = () => dailyMode;\nexport function setupStableBlock() { activeWorld = WORLDS_BY_ID.life; cells.fill(0); ages.fill(0); for (const i of [0, 1, GRID, GRID + 1]) cells[i] = 1; }\n`);
   writeFileSync(join(dir, 'run.mjs'), RUNNER);
   return dir;
 }

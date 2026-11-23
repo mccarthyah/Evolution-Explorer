@@ -362,10 +362,10 @@ func build_world() -> void:
 	hint.position = Vector2(20.0, 125.0)
 	hint.add_theme_font_size_override("font_size", 14)
 	hint.add_theme_color_override("font_color", Color(0.77, 0.83, 0.96))
-	hint.text = "WASD fly  |  Arrow keys look  |  Space/Ctrl rise/fall  |  Shift boost\nV overview  |  P pause  |  N step  |  R randomize  |  C clear  |  Esc quit\n[ / ] speed  |  - / = height  |  M memory  |  1/2/3 species  |  F/G place/erase cell\nSeed tools (aim at ground): 4 R-pento 5⚡  5 Glider 10⚡  6 Pulsar 25⚡  7 Rain 20⚡\n8 Stasis 15⚡  9 Glider Gun 60⚡  —  harvest gold orbs at blast sites for ⚡\nJ field journal  |  S save code / L load code  |  B bloom  |  T day/night"
+	hint.text = "WASD fly  |  Arrow keys look  |  Space/Ctrl rise/fall  |  Shift boost\nV overview  |  P pause  |  N step  |  R randomize  |  C clear  |  Esc quit\n[ / ] speed  |  - / = height  |  M memory  |  1/2/3 species  |  F/G place/erase cell\nSeed tools (aim at ground): 4 R-pento 5⚡  5 Glider 10⚡  6 Pulsar 25⚡  7 Rain 20⚡\n8 Stasis 15⚡  9 Glider Gun 60⚡  —  harvest gold orbs at blast sites for ⚡\nJ field journal  |  X save code / L load code  |  B bloom  |  T day/night"
 	canvas.add_child(hint)
 	hint.text += "\nInstability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON"
-	hint.text += "\nK minimap  |  H replay (, / . scrub)  |  D daily challenge"
+	hint.text += "\nK minimap  |  H replay (, / . scrub)  |  Z daily challenge"
 	hint.text += "\nU genetics lab  |  Q/E select/place seeds  |  Y auto-harvester 40⚡"
 	hint.text += "\n🌍 Weather strikes: ☄️ meteors · 🔥 wildfire · 🌌 aurora ×2XP · 🌸 pollen — species RPS ecology"
 	hint.text += "\n0 cycle worlds  |  Life · Day & Night · HighLife (Lv5) · Crystals (Lv8)"
@@ -1017,7 +1017,7 @@ func _unhandled_input(event: InputEvent) -> void:
 			KEY_J:
 				journal_label.visible = not journal_label.visible
 				refresh_journal()
-			KEY_S:
+			KEY_X:
 				DisplayServer.clipboard_set(encode_ecosystem())
 				show_banner("Ecosystem code copied to clipboard", Color(0.65, 1.0, 0.85))
 			KEY_L:
@@ -1035,7 +1035,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				minimap_on = not minimap_on
 				if minimap != null:
 					minimap.visible = minimap_on
-			KEY_D:
+			KEY_Z:
 				start_daily()
 			KEY_F, KEY_G:
 				paint_at_cursor(get_viewport().get_visible_rect().size * 0.5, event.keycode == KEY_F)
