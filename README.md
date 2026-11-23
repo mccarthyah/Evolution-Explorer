@@ -229,8 +229,8 @@ templates. It runs for relevant changes and can also be started manually. The
 committed. The export uses the no-threads template, so it does not require
 cross-origin isolation headers when embedded in a preview.
 
-To try a build locally, download and extract that artifact to `build/godot-web/`,
-then run `python3 tools/serve-godot-preview.py` and open port 8001. In Arena,
-start that command as a live preview after the extracted artifact is available
-in the workspace. This export is distinct from the hand-written Three.js web
+To try a build locally or in Arena, run `python3 tools/serve-godot-preview.py`
+and open port 8001. The setup page accepts the downloaded ZIP directly in the
+browser and extracts it into `build/godot-web/` (ignored by Git). Alternatively,
+extract the artifact there yourself before starting the server. This export is distinct from the hand-written Three.js web
 version. A headless export alone does not verify rendering or browser input.
