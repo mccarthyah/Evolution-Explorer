@@ -898,17 +898,17 @@ func update_visuals(delta: float) -> void:
 			var h: float = maxf(0.025, heights[i])
 			var pos: Vector3 = Vector3((float(x) - float(GRID - 1) * 0.5) * SPACING, h * 0.5, (float(z) - float(GRID - 1) * 0.5) * SPACING)
 			multimesh.set_instance_transform(i, Transform3D(Basis().scaled(Vector3(1.0, h, 1.0)), pos))
-		var tint: Color
-		if living > 0:
-			tint = PALETTE[living - 1].lerp(Color(1.0, 0.52, 0.26), age_factor * 0.55)
-			if ages[i] >= tower_lifespan() - 8:
-				tint = tint.lerp(Color(1.0, 0.16, 0.04), 0.65 + 0.35 * sin(float(generations) * 2.0))
-		else:
-			tint = Color(0.06, 0.14, 0.26).lerp(Color(0.19, 0.26, 0.42), terrain_memory)
-		if fires.has(i):
-			tint = Color(1.0, 0.42 + 0.3 * sin(float(generations) * 3.0 + float(i)), 0.06)
-		tint = Color(tint.r * world_brightness, tint.g * world_brightness, tint.b * world_brightness)
-		multimesh.set_instance_color(i, tint)
+			var tint: Color
+			if living > 0:
+				tint = PALETTE[living - 1].lerp(Color(1.0, 0.52, 0.26), age_factor * 0.55)
+				if ages[i] >= tower_lifespan() - 8:
+					tint = tint.lerp(Color(1.0, 0.16, 0.04), 0.65 + 0.35 * sin(float(generations) * 2.0))
+			else:
+				tint = Color(0.06, 0.14, 0.26).lerp(Color(0.19, 0.26, 0.42), terrain_memory)
+			if fires.has(i):
+				tint = Color(1.0, 0.42 + 0.3 * sin(float(generations) * 3.0 + float(i)), 0.06)
+			tint = Color(tint.r * world_brightness, tint.g * world_brightness, tint.b * world_brightness)
+			multimesh.set_instance_color(i, tint)
 
 func update_flight(delta: float) -> void:
 	var look_speed: float = 1.65
