@@ -25,6 +25,7 @@
     <b>genetics upgrades</b>, unlockable seeds (Acorn, Simkin Gun, Big Bang),<br>
     <b>12 lifeforms</b> to discover, 9 contracts, daily challenges. Progress saves.</p>
     <div class="howto">
+      <div class="howto-row touch-instruction"><span>👆</span><p>Touch controls appear during play. Hold the pads to fly and look; use Plant, Erase and seed buttons to garden.</p></div>
       <div class="howto-row"><span>🕹️</span><p><b>WASD</b> fly &nbsp;•&nbsp; <b>Arrow keys</b> look &nbsp;•&nbsp; <b>Space/Ctrl</b> rise/fall &nbsp;•&nbsp; <b>Shift</b> boost</p></div>
       <div class="howto-row"><span>🎨</span><p><b>F</b> place cell / <b>G</b> erase at screen centre — species <b>1 / 2 / 3</b> (or click the ground)</p></div>
       <div class="howto-row"><span>⚡</span><p><b>Harvest gold orbs</b> at blast sites for biomass + XP — seeds: <b>4-9</b> or cycle with <b>Q/E</b> • more unlock as you level</p></div>
@@ -58,6 +59,30 @@ U genetics lab | Y auto-harvester 40⚡ | Q/E select/place seed
 J field journal | X save code / L load code | B bloom | T day/night
 K minimap | H replay (, / . scrub) | Z daily challenge
 Instability: towers 40 gen | oscillators 12 cycles | blast radius 4 | chain reactions ON</div>
+  <div id="touch-controls" aria-label="Touch game controls">
+    <div class="touch-actions">
+      <button id="touch-plant" type="button">Plant</button><button id="touch-erase" type="button">Erase</button>
+      <button id="touch-species" type="button">Species</button><button id="touch-cycle" type="button">Next seed</button><button id="touch-use" type="button">Use seed</button>
+      <button id="touch-more-toggle" type="button" aria-expanded="false" aria-controls="touch-more">More</button>
+    </div>
+    <div id="touch-more" class="hidden">
+      <button id="touch-pause" type="button">Pause</button><button id="touch-step" type="button">Step</button><button id="touch-overview" type="button">Overview</button>
+      <button id="touch-world" type="button">World</button><button id="touch-daily" type="button">Daily</button><button id="touch-random" type="button">Random</button>
+      <button id="touch-genetics" type="button">Genetics</button><button id="touch-harvester" type="button">Harvester</button><button id="touch-journal" type="button">Journal</button>
+      <button id="touch-save" type="button">Save</button><button id="touch-load" type="button">Load</button><button id="touch-replay" type="button">Replay</button><button id="touch-replay-prev" type="button">◀ frame</button><button id="touch-replay-next" type="button">frame ▶</button><button id="touch-map" type="button">Map</button>
+    </div>
+    <div class="touch-pads">
+      <div class="touch-pad" aria-label="Fly controls">
+        <span></span><button id="touch-forward" aria-label="Fly forward">▲</button><span></span>
+        <button id="touch-left" aria-label="Fly left">◀</button><button id="touch-back" aria-label="Fly backward">▼</button><button id="touch-right" aria-label="Fly right">▶</button>
+      </div>
+      <div class="touch-alt"><button id="touch-rise" aria-label="Rise">Rise</button><button id="touch-fall" aria-label="Descend">Down</button></div>
+      <div class="touch-pad" aria-label="Look controls">
+        <span></span><button id="touch-look-up" aria-label="Look up">▲</button><span></span>
+        <button id="touch-look-left" aria-label="Look left">◀</button><button id="touch-look-down" aria-label="Look down">▼</button><button id="touch-look-right" aria-label="Look right">▶</button>
+      </div>
+    </div>
+  </div>
   <div id="toasts"></div>
   <div id="journal" class="journal hidden"></div>
   <canvas id="minimap" width="146" height="146"></canvas>

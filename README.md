@@ -132,6 +132,14 @@ Press `X` for a compact **EVO2 code** (run-length encoded, species included) —
 
 ## 🎮 Controls
 
+### 👆 Touch controls (web version)
+
+On touch-capable devices, on-screen pads appear after starting. Hold the left
+pad to fly and the right pad to look; Rise/Down control altitude. Plant, Erase,
+Species, Next seed and Use seed act at the screen centre. More opens additional
+game, save/load and replay controls. The browser version supports touch; the
+Godot version still requires keyboard/mouse or a controller.
+
 ### 🎮 Controller (web version)
 
 Xbox-layout pads work natively — including the **ROG Ally X** (put it in **Gamepad mode** via Command Center so the browser sees XInput, not mouse emulation):

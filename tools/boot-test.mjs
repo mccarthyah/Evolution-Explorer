@@ -117,7 +117,7 @@ function makeEl(id) {
     addEventListener(evt, fn) { (this._listeners[evt] = this._listeners[evt] || []).push(fn); },
     removeEventListener() {},
     getContext() { return ctx2d; },
-    focus() {}, select() {},
+    focus() {}, select() {}, setAttribute() {}, setPointerCapture() {},
     appendChild() {}, removeChild() {},
     click() { for (const fn of (this._listeners.click || []).slice()) fn({}); },
   };
@@ -237,6 +237,28 @@ try {
   check('T9 losing focus releases held controls', game.getKeys().size === 0);
 } catch (e) { check('keyboard regression tests', false, e.stack); }
 
+// Multi-touch controls use independent pointer IDs and release on cancel/blur.
+try {
+  function pointer(id, type, pointerId) {
+    for (const fn of els.get(id)._listeners[type] || []) fn({ pointerId, preventDefault() {} });
+  }
+  pointer('touch-forward', 'pointerdown', 1);
+  pointer('touch-look-left', 'pointerdown', 2);
+  check('touch supports simultaneous flight and look', game.getTouchKeys().has('w') && game.getTouchKeys().has('arrowleft'));
+  pointer('touch-forward', 'pointerup', 1);
+  check('touch release keeps other pointer active', !game.getTouchKeys().has('w') && game.getTouchKeys().has('arrowleft'));
+  pointer('touch-look-left', 'pointercancel', 2);
+  check('touch cancel releases movement', game.getTouchKeys().size === 0);
+  pointer('touch-rise', 'pointerdown', 3);
+  for (const fn of windowListeners.blur || []) fn();
+  check('touch focus loss releases movement', game.getTouchKeys().size === 0);
+  els.get('touch-save').click();
+  check('touch opens save modal', !els.get('save-modal').classList.contains('hidden'));
+  pointer('touch-forward', 'pointerdown', 4);
+  check('touch movement disabled in modal', game.getTouchKeys().size === 0);
+  els.get('save-close-btn').click();
+} catch (e) { check('touch regression tests', false, e.stack); }
+
 // Import validates the complete format and preserves legacy centered grids.
 try {
   const rows = ['a1.7', ...Array(7).fill('.8')].join('/');
@@ -293,7 +315,7 @@ function buildDir(docoredSrc) {
   writeFileSync(join(dir, 'node_modules/three/index.mjs'), THREE_STUB);
   for (const [name, body] of [['EffectComposer', POST_STUB], ['RenderPass', POST_STUB], ['UnrealBloomPass', POST_STUB]])
     writeFileSync(join(dir, 'lib/postprocessing/' + name + '.js'), body);
-  writeFileSync(join(dir, 'js/main.mjs'), docoredSrc + `\nexport { resetPilot, addXP, loadPilot, stepSimulation, encodeEcosystem, decodeEcosystem };\nexport const getPilot = () => pilot;\nexport const getCells = () => cells;\nexport const getKeys = () => keys;\nexport const getToolsUsed = () => toolsUsed;\nexport const isDaily = () => dailyMode;\nexport function setupStableBlock() { activeWorld = WORLDS_BY_ID.life; cells.fill(0); ages.fill(0); for (const i of [0, 1, GRID, GRID + 1]) cells[i] = 1; }\n`);
+  writeFileSync(join(dir, 'js/main.mjs'), docoredSrc + `\nexport { resetPilot, addXP, loadPilot, stepSimulation, encodeEcosystem, decodeEcosystem };\nexport const getPilot = () => pilot;\nexport const getCells = () => cells;\nexport const getTouchKeys = () => touchKeys;\nexport const getKeys = () => keys;\nexport const getToolsUsed = () => toolsUsed;\nexport const isDaily = () => dailyMode;\nexport function setupStableBlock() { activeWorld = WORLDS_BY_ID.life; cells.fill(0); ages.fill(0); for (const i of [0, 1, GRID, GRID + 1]) cells[i] = 1; }\n`);
   writeFileSync(join(dir, 'run.mjs'), RUNNER);
   return dir;
 }

@@ -978,25 +978,27 @@ function updateVisuals(dt) {
 }
 
 /* ─────────────────────────── FLIGHT & PAINTING ──────────────── */
-const keys = new Set();
+const keys = new Set(), touchKeys = new Set(), touchPointers = new Map();
+const hasFlightKey = key => keys.has(key) || touchKeys.has(key);
+function clearTouchFlight() { touchKeys.clear(); touchPointers.clear(); }
 function updateFlight(dt) {
   const look = 1.65;
-  if (keys.has('arrowleft')) yaw += look * dt;
-  if (keys.has('arrowright')) yaw -= look * dt;
-  if (keys.has('arrowup')) pitch -= look * dt;
-  if (keys.has('arrowdown')) pitch += look * dt;
+  if (hasFlightKey('arrowleft')) yaw += look * dt;
+  if (hasFlightKey('arrowright')) yaw -= look * dt;
+  if (hasFlightKey('arrowup')) pitch -= look * dt;
+  if (hasFlightKey('arrowdown')) pitch += look * dt;
   pitch = THREE.MathUtils.clamp(pitch, -1.48, 1.48);
   const move = new THREE.Vector3();
   const fwd = new THREE.Vector3(0, 0, -1).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
   const right = new THREE.Vector3(1, 0, 0).applyEuler(new THREE.Euler(pitch, yaw, 0, 'YXZ'));
-  if (keys.has('w')) move.add(fwd);
-  if (keys.has('s')) move.sub(fwd);
-  if (keys.has('d')) move.add(right);
-  if (keys.has('a')) move.sub(right);
-  if (keys.has(' ')) move.y += 1;
-  if (keys.has('control')) move.y -= 1;
+  if (hasFlightKey('w')) move.add(fwd);
+  if (hasFlightKey('s')) move.sub(fwd);
+  if (hasFlightKey('d')) move.add(right);
+  if (hasFlightKey('a')) move.sub(right);
+  if (hasFlightKey(' ')) move.y += 1;
+  if (hasFlightKey('control')) move.y -= 1;
   if (move.lengthSq() > 0) {
-    const sp = keys.has('shift') ? 42 : 15;
+    const sp = hasFlightKey('shift') ? 42 : 15;
     camera.position.addScaledVector(move.normalize(), sp * dt);
     camera.position.y = Math.max(0.8, camera.position.y);
   }
@@ -1186,7 +1188,7 @@ function contractHudText() {
 }
 
 /* ─────────────────────────── INPUT ──────────────────────────── */
-window.addEventListener('keydown', e => {
+function handleGameKey(e) {
   const k = e.key.toLowerCase();
   const tag = e.target && e.target.tagName;
   if (!started || (e.target && e.target.isContentEditable) || ['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(tag) ||
@@ -1233,7 +1235,7 @@ window.addEventListener('keydown', e => {
   else if (['4', '5', '6', '7', '8', '9'].includes(k)) useTool(['rpento', 'glider', 'pulsar', 'rain', 'stasis', 'gun'][Number(k) - 4]);
   else if (k === 'q') cycleTool(1);
   else if (k === 'e') { const list = unlockedTools(); if (list[selectedToolIdx]) useTool(list[selectedToolIdx].id); }
-  else if (k === 'u') { keys.clear(); refreshUpgradeModal(); $('upgrade-modal').classList.remove('hidden'); }
+  else if (k === 'u') { keys.clear(); clearTouchFlight(); refreshUpgradeModal(); $('upgrade-modal').classList.remove('hidden'); }
   else if (k === 'y') placeHarvester();
   else if (k === 'b') { bloomEnabled = !bloomEnabled; toast(`✨ Bloom ${bloomEnabled ? 'ON' : 'OFF'}`, 1500); }
   else if (k === 't') { dayNightEnabled = !dayNightEnabled; toast(`🌗 Day/night cycle ${dayNightEnabled ? 'ON' : 'OFF'}`, 1500); }
@@ -1243,9 +1245,53 @@ window.addEventListener('keydown', e => {
   else if (k === 'h') toggleHistory();
   else if (k === 'k') { minimapOn = !minimapOn; $('minimap').classList.toggle('hidden', !minimapOn); }
   else if (k === 'z') startDaily();
-});
+}
+window.addEventListener('keydown', handleGameKey);
 window.addEventListener('keyup', e => keys.delete(e.key.toLowerCase()));
-window.addEventListener('blur', () => keys.clear());
+window.addEventListener('blur', () => { keys.clear(); clearTouchFlight(); });
+document.addEventListener('visibilitychange', () => { if (document.hidden) { keys.clear(); clearTouchFlight(); } });
+// Independent pointer IDs permit simultaneous movement and looking.
+for (const [id, key] of Object.entries({
+  'touch-forward':'w', 'touch-back':'s', 'touch-left':'a', 'touch-right':'d',
+  'touch-look-up':'arrowup', 'touch-look-down':'arrowdown', 'touch-look-left':'arrowleft', 'touch-look-right':'arrowright',
+  'touch-rise':' ', 'touch-fall':'control',
+})) {
+  const button = $(id);
+  button.addEventListener('pointerdown', e => {
+    if (!started || ['save-modal', 'load-modal', 'upgrade-modal'].some(name => !$(name).classList.contains('hidden'))) return;
+    e.preventDefault();
+    touchPointers.set(e.pointerId, key); touchKeys.add(key);
+    if (button.setPointerCapture) button.setPointerCapture(e.pointerId);
+  });
+  const release = e => {
+    const held = touchPointers.get(e.pointerId);
+    touchPointers.delete(e.pointerId);
+    if (held && ![...touchPointers.values()].includes(held)) touchKeys.delete(held);
+  };
+  button.addEventListener('pointerup', release);
+  button.addEventListener('pointercancel', release);
+  button.addEventListener('lostpointercapture', release);
+}
+for (const [id, key] of Object.entries({
+  'touch-plant':'f', 'touch-erase':'g', 'touch-cycle':'q', 'touch-use':'e',
+  'touch-pause':'p', 'touch-step':'n', 'touch-overview':'v', 'touch-world':'0', 'touch-daily':'z',
+  'touch-random':'r', 'touch-genetics':'u', 'touch-harvester':'y', 'touch-journal':'j',
+  'touch-save':'x', 'touch-load':'l', 'touch-replay':'h', 'touch-replay-prev':',', 'touch-replay-next':'.', 'touch-map':'k',
+})) $(id).addEventListener('click', () => {
+  handleGameKey({ key, target: null, preventDefault() {} });
+  keys.delete(key);
+});
+$('touch-species').addEventListener('click', () => {
+  if (!started || historyMode) return;
+  brushSpecies = brushSpecies % 3 + 1;
+  toast(`🎨 Species ${brushSpecies}`, 1500);
+});
+$('touch-more-toggle').addEventListener('click', () => {
+  const more = $('touch-more');
+  more.classList.toggle('hidden');
+  $('touch-more-toggle').setAttribute('aria-expanded', String(!more.classList.contains('hidden')));
+});
+
 function toggleOverview() {
   overview = !overview;
   if (overview) { camera.position.set(0, 105, 72); yaw = 0; pitch = -0.95; }
@@ -1535,8 +1581,8 @@ function decodeEcosystem(code) {
   for (let z = 0; z < n; z++) for (let x = 0; x < n; x++) out[idxOf(x + off, z + off)] = src[z * n + x];
   return out;
 }
-function openSaveModal() { keys.clear(); $('save-area').value = encodeEcosystem(); $('save-modal').classList.remove('hidden'); $('save-area').select(); }
-function openLoadModal() { keys.clear(); $('load-area').value = ''; $('load-modal').classList.remove('hidden'); $('load-area').focus(); }
+function openSaveModal() { keys.clear(); clearTouchFlight(); $('save-area').value = encodeEcosystem(); $('save-modal').classList.remove('hidden'); $('save-area').select(); }
+function openLoadModal() { keys.clear(); clearTouchFlight(); $('load-area').value = ''; $('load-modal').classList.remove('hidden'); $('load-area').focus(); }
 function loadFromModal() {
   const arr = decodeEcosystem($('load-area').value);
   if (!arr) { AudioSys.err(); toast('❌ Invalid ecosystem code (expected a valid EVO1 or EVO2 code)', 2500, 'err'); return; }
