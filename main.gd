@@ -1357,21 +1357,27 @@ func points_signature(pts: Array) -> String:
 
 func rotate_rows(rows: Array) -> Array:
 	var r_count: int = rows.size()
-	var c_count: int = String(rows[0]).length()
+	var c_count: int = 0
+	for row in rows:
+		c_count = maxi(c_count, String(row).length())
 	var out: Array = []
 	for c in range(c_count):
 		var line: String = ""
 		for r in range(r_count):
-			line += String(rows[r_count - 1 - r])[c]
+			line += String(rows[r_count - 1 - r]).rpad(c_count, ".")[c]
 		out.append(line)
 	return out
 
 func mirror_rows(rows: Array) -> Array:
 	var out: Array = []
+	var width: int = 0
+	for row in rows:
+		width = maxi(width, String(row).length())
 	for row in rows:
 		var line: String = ""
-		for c in range(String(row).length() - 1, -1, -1):
-			line += String(row)[c]
+		var padded: String = String(row).rpad(width, ".")
+		for c in range(width - 1, -1, -1):
+			line += padded[c]
 		out.append(line)
 	return out
 
