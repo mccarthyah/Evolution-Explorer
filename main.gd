@@ -257,6 +257,9 @@ var multimesh: MultiMesh
 var camera: Camera3D
 var hud: Label
 var hint: Label
+var touch_held: Dictionary = {}
+var touch_overlay: Control
+var touch_more: VBoxContainer
 var floor_mesh: MeshInstance3D
 var rng: RandomNumberGenerator = RandomNumberGenerator.new()
 
@@ -390,6 +393,82 @@ func build_world() -> void:
 	canvas.add_child(upgrade_label)
 	refresh_upgrade_label()
 	build_minimap(canvas)
+	if DisplayServer.is_touchscreen_available():
+		build_touch_controls()
+
+# Touch UI uses the same actions as the keyboard and keeps hold state separate.
+func make_touch_button(row: HBoxContainer, label: String, key: Key, held: bool = false) -> Button:
+	var button: Button = Button.new()
+	button.name = "Touch_" + label.replace(" ", "_")
+	button.text = label
+	button.custom_minimum_size = Vector2(125, 90)
+	button.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	button.add_theme_font_size_override("font_size", 26)
+	button.focus_mode = Control.FOCUS_NONE
+	row.add_child(button)
+	if held:
+		button.button_down.connect(func() -> void: touch_held[key] = true)
+		button.button_up.connect(func() -> void: touch_held.erase(key))
+	else:
+		button.pressed.connect(func() -> void: touch_action(key))
+	return button
+
+func touch_action(key: Key) -> void:
+	touch_held.clear()
+	var event: InputEventKey = InputEventKey.new()
+	event.keycode = key
+	event.pressed = true
+	_unhandled_input(event)
+
+func build_touch_controls() -> void:
+	if touch_overlay != null:
+		return
+	var layer: CanvasLayer = CanvasLayer.new()
+	layer.layer = 2
+	add_child(layer)
+	touch_overlay = Control.new()
+	touch_overlay.set_anchors_and_offsets_preset(Control.PRESET_FULL_RECT)
+	touch_overlay.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	layer.add_child(touch_overlay)
+	var stack: VBoxContainer = VBoxContainer.new()
+	stack.set_anchors_preset(Control.PRESET_BOTTOM_WIDE)
+	stack.grow_vertical = Control.GROW_DIRECTION_BEGIN
+	stack.offset_top = -190
+	stack.offset_left = 10
+	stack.offset_right = -10
+	stack.offset_bottom = -10
+	stack.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	touch_overlay.add_child(stack)
+	touch_more = VBoxContainer.new()
+	touch_more.visible = false
+	touch_more.mouse_filter = Control.MOUSE_FILTER_IGNORE
+	stack.add_child(touch_more)
+	var extra1: HBoxContainer = HBoxContainer.new()
+	var extra2: HBoxContainer = HBoxContainer.new()
+	touch_more.add_child(extra1)
+	touch_more.add_child(extra2)
+	for item in [["Pause", KEY_P], ["Step", KEY_N], ["Overview", KEY_V], ["World", KEY_0], ["Daily", KEY_Z], ["Random", KEY_R], ["Journal", KEY_J], ["Map", KEY_K], ["Replay", KEY_H]]:
+		make_touch_button(extra1, item[0], item[1])
+	for item in [["Save", KEY_X], ["Load", KEY_L], ["Genetics", KEY_U], ["Upgrade 1", KEY_1], ["Upgrade 2", KEY_2], ["Upgrade 3", KEY_3], ["Upgrade 4", KEY_4], ["Harvester", KEY_Y], ["Prev", KEY_COMMA], ["Next", KEY_PERIOD]]:
+		make_touch_button(extra2, item[0], item[1])
+	var actions: HBoxContainer = HBoxContainer.new()
+	stack.add_child(actions)
+	for item in [["Plant", KEY_F], ["Erase", KEY_G], ["Species 1", KEY_1], ["Species 2", KEY_2], ["Species 3", KEY_3], ["Next seed", KEY_Q], ["Use seed", KEY_E]]:
+		make_touch_button(actions, item[0], item[1])
+	var more: Button = Button.new()
+	more.name = "Touch_More"
+	more.text = "More"
+	more.custom_minimum_size = Vector2(125, 90)
+	more.size_flags_horizontal = Control.SIZE_EXPAND_FILL
+	more.add_theme_font_size_override("font_size", 26)
+	more.focus_mode = Control.FOCUS_NONE
+	more.pressed.connect(func() -> void: touch_more.visible = not touch_more.visible)
+	actions.add_child(more)
+	var flight: HBoxContainer = HBoxContainer.new()
+	stack.add_child(flight)
+	for item in [["Fly ▲", KEY_W], ["Fly ▼", KEY_S], ["Fly ◀", KEY_A], ["Fly ▶", KEY_D], ["Rise", KEY_SPACE], ["Down", KEY_CTRL], ["Look ◀", KEY_LEFT], ["Look ▶", KEY_RIGHT], ["Look ▲", KEY_UP], ["Look ▼", KEY_DOWN]]:
+		make_touch_button(flight, item[0], item[1], true)
+	hint.visible = false
 
 func index_of(x: int, z: int) -> int:
 	return z * GRID + x
@@ -910,30 +989,35 @@ func update_visuals(delta: float) -> void:
 			tint = Color(tint.r * world_brightness, tint.g * world_brightness, tint.b * world_brightness)
 			multimesh.set_instance_color(i, tint)
 
+func flight_key_pressed(key: Key) -> bool:
+	return Input.is_key_pressed(key) or touch_held.has(key)
+
 func update_flight(delta: float) -> void:
 	var look_speed: float = 1.65
-	if Input.is_key_pressed(KEY_LEFT):
+	if flight_key_pressed(KEY_LEFT):
 		camera.rotation.y += look_speed * delta
-	if Input.is_key_pressed(KEY_RIGHT):
+	if flight_key_pressed(KEY_RIGHT):
 		camera.rotation.y -= look_speed * delta
-	if Input.is_key_pressed(KEY_UP):
+	if flight_key_pressed(KEY_UP):
 		camera.rotation.x -= look_speed * delta
-	if Input.is_key_pressed(KEY_DOWN):
+	if flight_key_pressed(KEY_DOWN):
 		camera.rotation.x += look_speed * delta
 	camera.rotation.x = clampf(camera.rotation.x, -1.48, 1.48)
 	var move: Vector3 = Vector3.ZERO
-	if Input.is_key_pressed(KEY_W): move -= camera.global_basis.z
-	if Input.is_key_pressed(KEY_S): move += camera.global_basis.z
-	if Input.is_key_pressed(KEY_A): move -= camera.global_basis.x
-	if Input.is_key_pressed(KEY_D): move += camera.global_basis.x
-	if Input.is_key_pressed(KEY_SPACE): move += Vector3.UP
-	if Input.is_key_pressed(KEY_CTRL): move += Vector3.DOWN
+	if flight_key_pressed(KEY_W): move -= camera.global_basis.z
+	if flight_key_pressed(KEY_S): move += camera.global_basis.z
+	if flight_key_pressed(KEY_A): move -= camera.global_basis.x
+	if flight_key_pressed(KEY_D): move += camera.global_basis.x
+	if flight_key_pressed(KEY_SPACE): move += Vector3.UP
+	if flight_key_pressed(KEY_CTRL): move += Vector3.DOWN
 	if move.length_squared() > 0.0:
-		var speed: float = 42.0 if Input.is_key_pressed(KEY_SHIFT) else 15.0
+		var speed: float = 42.0 if flight_key_pressed(KEY_SHIFT) else 15.0
 		camera.global_position += move.normalized() * speed * delta
 		camera.position.y = maxf(0.8, camera.position.y)
 
 func _notification(what: int) -> void:
+	if what == NOTIFICATION_APPLICATION_FOCUS_OUT:
+		touch_held.clear()
 	if what == NOTIFICATION_WM_CLOSE_REQUEST:
 		get_tree().quit()
 

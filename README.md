@@ -137,8 +137,7 @@ Press `X` for a compact **EVO2 code** (run-length encoded, species included) —
 On touch-capable devices, on-screen pads appear after starting. Hold the left
 pad to fly and the right pad to look; Rise/Down control altitude. Plant, Erase,
 Species, Next seed and Use seed act at the screen centre. More opens additional
-game, save/load and replay controls. The browser version supports touch; the
-Godot version still requires keyboard/mouse or a controller.
+game, save/load and replay controls. The Godot version also shows touch buttons on touchscreen devices; its More menu includes genetics, save/load and replay controls.
 
 ### 🎮 Controller (web version)
 

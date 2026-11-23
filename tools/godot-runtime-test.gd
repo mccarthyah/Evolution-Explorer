@@ -64,6 +64,23 @@ func run_tests() -> void:
 	previous = game.cells.duplicate()
 	for bad in ["EVO1;8junk;" + rows, "EVO1;+8;" + rows, "EVO1;8;" + rows + "/", "EVO1;;8;" + rows, "EVO1;8;a9/" + "/".join([".8", ".8", ".8", ".8", ".8", ".8", ".8"])]:
 		check("reject malformed ecosystem: " + bad.substr(0, 16), not game.decode_ecosystem(bad) and game.cells == previous)
+	game.build_touch_controls()
+	var fly: Button = game.find_child("Touch_Fly_▲", true, false)
+	var look: Button = game.find_child("Touch_Look_◀", true, false)
+	var more: Button = game.find_child("Touch_More", true, false)
+	check("touch controls created", fly != null and look != null and more != null)
+	if fly != null and look != null and more != null:
+		fly.button_down.emit()
+		look.button_down.emit()
+		check("touch holds multiple flight controls", game.flight_key_pressed(KEY_W) and game.flight_key_pressed(KEY_LEFT))
+		fly.button_up.emit()
+		check("touch release leaves other hold active", not game.flight_key_pressed(KEY_W) and game.flight_key_pressed(KEY_LEFT))
+		game.notification(Node.NOTIFICATION_APPLICATION_FOCUS_OUT)
+		check("focus loss releases touch controls", game.touch_held.is_empty())
+		more.pressed.emit()
+		check("touch more menu opens", game.touch_more.visible)
+		game.touch_action(KEY_2)
+		check("touch action changes brush", game.brush_species == 2)
 	game.pilot["xp"] = 0
 	game.pilot["level"] = 1
 	game.aurora_ttl = 0
