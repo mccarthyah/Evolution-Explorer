@@ -32,3 +32,35 @@ jobs:
         run: python -m pip install gdtoolkit==4.5.0
       - name: Parse Godot game script
         run: python -m gdtoolkit.parser main.gd
+
+  godot-runtime:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Cache Godot 4.7.2
+        id: godot-cache
+        uses: actions/cache@v4
+        with:
+          path: ~/.cache/evolution-godot/4.7.2
+          key: godot-4.7.2-stable-linux-x86_64-cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4
+      - name: Download and verify official Godot release
+        if: steps.godot-cache.outputs.cache-hit != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+          url=https://github.com/godotengine/godot/releases/download/4.7.2-stable/Godot_v4.7.2-stable_linux.x86_64.zip
+          curl -fsSL --retry 3 "$url" -o "$RUNNER_TEMP/godot.zip"
+          echo "cadd3204e728a35d3f13adb7fd0d7902636b79f6b95c40c265eb73b6c35329e4  $RUNNER_TEMP/godot.zip" | sha256sum -c -
+          mkdir -p "$HOME/.cache/evolution-godot/4.7.2"
+          unzip -q "$RUNNER_TEMP/godot.zip" -d "$HOME/.cache/evolution-godot/4.7.2"
+      - name: Check and boot Godot project
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot="$HOME/.cache/evolution-godot/4.7.2/Godot_v4.7.2-stable_linux.x86_64"
+          "$godot" --headless --path . --script res://main.gd --check-only
+          timeout 90s "$godot" --headless --path . --quit-after 120 2>&1 | tee "$RUNNER_TEMP/godot.log"
+          if grep -E '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$RUNNER_TEMP/godot.log"; then
+            echo 'Godot reported errors during startup.' >&2
+            exit 1
+          fi
