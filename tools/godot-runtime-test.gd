@@ -52,7 +52,12 @@ func run_tests() -> void:
 			expected_cells[game.index_of(point.x, point.y)] = 1
 		check("glider travels one cell in " + id, game.cells == expected_cells)
 	var rows: String = "a1.7/" + "/".join([".8", ".8", ".8", ".8", ".8", ".8", ".8"])
+	var save_fixture: Dictionary = fixture["ecosystem"]
+	check("shared ecosystem checksum fixture", game.ecosystem_checksum(save_fixture["payload"]) == save_fixture["checksum"] and game.decode_ecosystem(save_fixture["payload"] + ";" + save_fixture["checksum"]))
 	var full_code: String = game.encode_ecosystem()
+	check("ecosystem saves include checksum", full_code.begins_with("EVO2;"))
+	var bad_checksum: String = full_code.substr(0, full_code.length() - 1) + ("1" if full_code.ends_with("0") else "0")
+	check("checksum rejects corruption", not game.decode_ecosystem(bad_checksum))
 	var previous: PackedByteArray = game.cells.duplicate()
 	check("ecosystem code round trips", game.decode_ecosystem(full_code) and game.cells == previous)
 	check("legacy ecosystem is centred", game.decode_ecosystem("EVO1;8;" + rows) and game.cells[game.index_of(28, 28)] == 1 and game.population == 1)

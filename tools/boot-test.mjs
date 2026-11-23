@@ -18,6 +18,7 @@ import { spawnSync } from 'child_process';
 
 const ROOT = new URL('..', import.meta.url).pathname;
 const src = readFileSync(join(ROOT, 'js/main.js'), 'utf8');
+const saveFixture = JSON.parse(readFileSync(join(ROOT, 'tools/fixtures/world-seeds.json'), 'utf8')).ecosystem;
 
 /* ═══ Minimal THREE stub — every symbol js/main.js imports ═══ */
 const THREE_STUB = `class Color {
@@ -240,7 +241,12 @@ try {
 try {
   const rows = ['a1.7', ...Array(7).fill('.8')].join('/');
   const decoded = game.decodeEcosystem('EVO1;8;' + rows);
-  const roundtrip = game.decodeEcosystem(game.encodeEcosystem());
+  const encoded = game.encodeEcosystem();
+  const roundtrip = game.decodeEcosystem(encoded);
+  check('ecosystem saves include checksum', encoded.startsWith('EVO2;') && /;[0-9a-f]{8}$/.test(encoded));
+  check('checksum rejects corruption', game.decodeEcosystem(encoded.slice(0, -1) + (encoded.endsWith('0') ? '1' : '0')) === null);
+  const fixtureCode = ${JSON.stringify(saveFixture.payload + ';' + saveFixture.checksum)};
+  check('shared checksummed ecosystem fixture', game.decodeEcosystem(fixtureCode) !== null);
   check('ecosystem code round trips', roundtrip && roundtrip.every((cell, i) => cell === game.getCells()[i]));
   check('legacy ecosystem is centred', decoded && decoded[28 * 64 + 28] === 1 && decoded.reduce((a, b) => a + b, 0) === 1);
   for (const bad of ['EVO1;8junk;' + rows, 'EVO1;+8;' + rows, 'EVO1;8;' + rows + '/', 'EVO1;;8;' + rows, 'EVO1;8;a9/' + Array(7).fill('.8').join('/')])

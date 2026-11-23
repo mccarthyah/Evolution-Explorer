@@ -115,7 +115,7 @@ Press `J` to open the journal. Explosions scatter gliders and blocks as debris, 
 
 ### 💾 Save & share ecosystems
 
-Press `X` for a compact **EVO1 code** (run-length encoded, species included) — web copies it to your clipboard with a share modal; Godot puts it on the clipboard directly. Anyone can press `L` and paste it to take over your exact world. Codes from the older 48×48 version still load — they're centred in the bigger field.
+Press `X` for a compact **EVO2 code** (run-length encoded, species included) — web copies it to your clipboard with a share modal; Godot puts it on the clipboard directly. Anyone can press `L` and paste it to take over your exact world. EVO2 includes a 32-bit FNV-1a checksum to catch accidental corruption; it is not a cryptographic signature and does not prevent deliberate tampering. Legacy EVO1 codes, including the older 48×48 version, still load; smaller grids are centred. Older game versions cannot read EVO2. Pilot progress is stored separately and is not checksummed.
 
 > **v7.1 "Open Skies"** grew the field from 48×48 to **64×64**, slimmed the pillars (~20% narrower), and dropped world-gen density from ~30% to ~12% — same lively ecosystems, far more sky between them. Ghost-memory pillars are also slightly shorter so dead terrain reads as quiet ground rather than clutter.
 

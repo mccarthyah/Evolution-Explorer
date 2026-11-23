@@ -1482,6 +1482,12 @@ const Drone = {
 };
 
 /* ── Ecosystem save/share (EVO1 run-length codes) ── */
+// FNV-1a checksum catches accidental corruption; it is not authentication.
+function ecosystemChecksum(text) {
+  let h = 2166136261;
+  for (let i = 0; i < text.length; i++) h = Math.imul(h ^ text.charCodeAt(i), 16777619) >>> 0;
+  return h.toString(16).padStart(8, '0');
+}
 function encodeEcosystem() {
   const rowsRLE = [];
   for (let z = 0; z < GRID; z++) {
@@ -1494,11 +1500,14 @@ function encodeEcosystem() {
     s += '.abc'[val] + run;
     rowsRLE.push(s);
   }
-  return `EVO1;${GRID};` + rowsRLE.join('/');
+  const payload = `EVO2;${GRID};` + rowsRLE.join('/');
+  return `${payload};${ecosystemChecksum(payload)}`;
 }
 function decodeEcosystem(code) {
   const parts = code.trim().split(';');
-  if (parts.length !== 3 || parts[0] !== 'EVO1') return null;
+  if (parts[0] === 'EVO2') {
+    if (parts.length !== 4 || !/^[0-9a-f]{8}$/.test(parts[3]) || ecosystemChecksum(parts.slice(0, 3).join(';')) !== parts[3]) return null;
+  } else if (parts[0] !== 'EVO1' || parts.length !== 3) return null;
   if (!/^\d+$/.test(parts[1])) return null;
   const n = Number(parts[1]);
   if (!Number.isInteger(n) || n < 8 || n > GRID) return null; /* legacy smaller grids load centred */
@@ -1530,7 +1539,7 @@ function openSaveModal() { keys.clear(); $('save-area').value = encodeEcosystem(
 function openLoadModal() { keys.clear(); $('load-area').value = ''; $('load-modal').classList.remove('hidden'); $('load-area').focus(); }
 function loadFromModal() {
   const arr = decodeEcosystem($('load-area').value);
-  if (!arr) { AudioSys.err(); toast('❌ Invalid ecosystem code (expected EVO1)', 2500, 'err'); return; }
+  if (!arr) { AudioSys.err(); toast('❌ Invalid ecosystem code (expected a valid EVO1 or EVO2 code)', 2500, 'err'); return; }
   cells = arr; ages.fill(0); history.fill(0);
   for (let i = 0; i < TOTAL; i++) if (cells[i]) ages[i] = 1;
   snapshots = []; tracks = new Map(); queue = []; cooldowns.fill(0); warnings.fill(0);

@@ -1027,7 +1027,7 @@ func _unhandled_input(event: InputEvent) -> void:
 				if decode_ecosystem(DisplayServer.clipboard_get()):
 					show_banner("Ecosystem loaded from clipboard ✓", Color(0.65, 1.0, 0.85))
 				else:
-					show_banner("No valid EVO1 code in clipboard", Color(1.0, 0.55, 0.6))
+					show_banner("No valid EVO1 or EVO2 code in clipboard", Color(1.0, 0.55, 0.6))
 			KEY_H:
 				toggle_history()
 			KEY_COMMA:
@@ -1430,6 +1430,13 @@ func journal_text() -> String:
 	return t
 
 # ── Ecosystem save/share (EVO1 run-length codes) ──
+# FNV-1a checksum detects accidental corruption; it is not authentication.
+func ecosystem_checksum(text: String) -> String:
+	var h: int = 2166136261
+	for byte in text.to_utf8_buffer():
+		h = ((h ^ int(byte)) * 16777619) & 0xFFFFFFFF
+	return "%08x" % h
+
 func encode_ecosystem() -> String:
 	var rows: Array = []
 	for z in range(GRID):
@@ -1447,11 +1454,15 @@ func encode_ecosystem() -> String:
 				run = 1
 		s += ".abc"[val] + str(run)
 		rows.append(s)
-	return "EVO1;%d;%s" % [GRID, "/".join(rows)]
+	var payload: String = "EVO2;%d;%s" % [GRID, "/".join(rows)]
+	return payload + ";" + ecosystem_checksum(payload)
 
 func decode_ecosystem(code: String) -> bool:
 	var parts: PackedStringArray = code.strip_edges().split(";", true)
-	if parts.size() != 3 or parts[0] != "EVO1":
+	if parts.size() == 4 and parts[0] == "EVO2":
+		if parts[3].length() != 8 or parts[3] != ecosystem_checksum(";".join([parts[0], parts[1], parts[2]])):
+			return false
+	elif parts.size() != 3 or parts[0] != "EVO1":
 		return false
 	if parts[1].is_empty():
 		return false
