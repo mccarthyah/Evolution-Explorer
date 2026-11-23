@@ -399,8 +399,8 @@ func index_of(x: int, z: int) -> int:
 func rnd() -> float:
 	if rng_state < 0:
 		return rng.randf()
-	rng_state = (rng_state * 1664525 + 1013904223) & 0x7FFFFFFF
-	return float(rng_state) / 2147483648.0
+	rng_state = (rng_state * 1664525 + 1013904223) & 0xFFFFFFFF
+	return float(rng_state) / 4294967296.0
 
 func rnd_range(lo: int, hi: int) -> int:
 	return lo + int(rnd() * float(hi - lo + 1))
@@ -1565,12 +1565,11 @@ func scrub_history(delta: int) -> void:
 	history_view = clampi(history_view + delta, 0, history_frames.size() - 1)
 
 # ── v5: daily challenge ──
-func daily_seed_hash() -> int:
-	var s: String = Time.get_date_string_from_system()
+func daily_seed_hash(s: String = Time.get_date_string_from_system()) -> int:
 	var h: int = 5381
 	for k in range(s.length()):
 		h = (h * 33) ^ s.unicode_at(k)
-	return h & 0x7FFFFFFF
+	return h & 0xFFFFFFFF
 
 func start_daily() -> void:
 	daily_mode = true

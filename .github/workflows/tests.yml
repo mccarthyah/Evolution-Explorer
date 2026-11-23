@@ -70,3 +70,17 @@ jobs:
             while IFS= read -r line; do echo "::error::$line"; done < "$RUNNER_TEMP/godot.log"
             exit 1
           fi
+      - name: Run Godot regression and parity tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          godot="$HOME/.cache/evolution-godot/4.7.2/Godot_v4.7.2-stable_linux.x86_64"
+          export XDG_DATA_HOME="$RUNNER_TEMP/evolution-test-data"
+          mkdir -p "$XDG_DATA_HOME"
+          status=0
+          "$godot" --headless --path . --script res://tools/godot-runtime-test.gd > "$RUNNER_TEMP/godot-tests.log" 2>&1 || status=$?
+          cat "$RUNNER_TEMP/godot-tests.log"
+          if [ "$status" -ne 0 ] || grep -qE '(^|[[:space:]])(SCRIPT ERROR|ERROR):' "$RUNNER_TEMP/godot-tests.log"; then
+            while IFS= read -r line; do echo "::error::$line"; done < "$RUNNER_TEMP/godot-tests.log"
+            exit 1
+          fi

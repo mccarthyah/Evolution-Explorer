@@ -1347,8 +1347,7 @@ function dailyDateString() {
   const d = new Date();
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 }
-function dailySeedHash() {
-  const s = dailyDateString();
+function dailySeedHash(s = dailyDateString()) {
   let h = 5381;
   for (let i = 0; i < s.length; i++) h = (Math.imul(h, 33) ^ s.charCodeAt(i)) >>> 0;
   return h >>> 0;

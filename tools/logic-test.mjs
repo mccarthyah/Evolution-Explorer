@@ -7,6 +7,7 @@ import { tmpdir } from 'os';
 import { join } from 'path';
 
 const src = readFileSync(new URL('../js/main.js', import.meta.url), 'utf8');
+const sharedSeeds = JSON.parse(readFileSync(new URL('./fixtures/world-seeds.json', import.meta.url), 'utf8'));
 
 function extractFn(name) {
   const start = src.indexOf(`function ${name}(`);
@@ -121,6 +122,19 @@ rngState = 987654321; seedWorld();
 let same = true;
 for (let i = 0; i < TOTAL; i++) if (a[i] !== cells[i]) { same = false; break; }
 check('T6 same seed + world → identical world', same);
+
+// Cross-runtime seed fixtures compare the complete board, not just population.
+const sharedSeeds = ${JSON.stringify(sharedSeeds)};
+for (const [id, expected] of Object.entries(sharedSeeds.worlds)) {
+  setActive(id); rngState = sharedSeeds.seed; seedWorld();
+  let hash = 2166136261;
+  for (const cell of cells) hash = Math.imul(hash ^ cell, 16777619) >>> 0;
+  check('shared seed fixture: ' + id, pop() === expected.population && hash === expected.cell_hash,
+        'population ' + pop() + ', hash ' + hash);
+}
+
+for (const [date, expected] of Object.entries(sharedSeeds.dates))
+  check('shared daily hash fixture: ' + date, dailySeedHash(date) === expected);
 
 // T7 tower lifespans per world
 setActive('crystal'); const t60 = towerLifespan();

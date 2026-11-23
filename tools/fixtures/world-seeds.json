@@ -1,0 +1,25 @@
+{
+  "seed": 123456789,
+  "worlds": {
+    "life": {
+      "population": 569,
+      "cell_hash": 3791654065
+    },
+    "daynight": {
+      "population": 1850,
+      "cell_hash": 2901182626
+    },
+    "highlife": {
+      "population": 569,
+      "cell_hash": 3791654065
+    },
+    "crystal": {
+      "population": 2,
+      "cell_hash": 1074188933
+    }
+  },
+  "dates": {
+    "2000-11-23": 2996094406,
+    "2026-11-23": 1388692866
+  }
+}

@@ -85,7 +85,7 @@ The simulation engine now runs **any Life-like B/S rule**, and the game ships fo
 | **HighLife** | B36/S23 | "The game Conway should have found." Nearly identical to Life… except it has the **Replicator** — a 12-cell pattern that copies itself every 12 generations. Stamp it as a seed (25⚡) and watch your garden clone itself. Discovering one in the wild is journal entry #13 | pilot level 5 |
 | **Crystals** | B3/S012345678 | *Life without Death*: cells never die. Veins of crystal grow from four tiny seeds and never recede — **explosions are your only mining tool** (tower lifespan 60 here). Sculpt, then blast | pilot level 8 |
 
-Gliders, blinkers, blocks and most classic patterns behave identically in HighLife, so your tools still work — they just occasionally do something *new*. The **daily challenge rotates rules by date**: the date seed picks both the world and the layout, identically for everyone.
+Gliders, blinkers, blocks and most classic patterns behave identically in HighLife, so your tools still work — they just occasionally do something *new*. The **daily challenge rotates rules by date**: the local date seed picks the world and starting layout identically across the web and Godot versions. Gameplay and later weather can diverge between versions.
 
 Your pilot earns a **rank title** as they level: Sprout Tender → Seed Sower → Groundskeeper → Landscape Architect → Master Gardener → Worldshaper. The Genetics Lab also keeps your **records** — biggest blast, tallest tower, best daily score, fires doused — and your **daily streak**: score the daily challenge on consecutive days and every 3rd day pays a bonus skill point.
 
@@ -123,7 +123,7 @@ Press `X` for a compact **EVO1 code** (run-length encoded, species included) —
 
 - **Minimap** (`K`) — live species territories, ghost memory, stasis bubbles, and your position + heading, bottom-right
 - **Replay** (`H`) — rewinds through the last **100 generations**; scrub with `,` / `.` (Shift ×10) or the slider (web). Sim pauses, the world dims, and you can watch explosions unfold backwards and forwards. Great for seeing how a territory war actually happened
-- **Daily challenge** (`Z`) — a date-derived seed generates the **same starting world for everyone playing that day**, and the same weather events too. At generation 300 your run is scored: `alive×3 + biomass + discoveries×25 + explosions×5`. Personal bests persist (browser localStorage / Godot `user://daily.cfg`), and consecutive scored days build a **streak** (+1 SP every 3 days). Press `R` to return to free mode
+- **Daily challenge** (`Z`) — a date-derived seed generates the **same starting world for everyone playing that day**, with deterministic weather in each version. At generation 300 your run is scored: `alive×3 + biomass + discoveries×25 + explosions×5`. Personal bests persist (browser localStorage / Godot `user://daily.cfg`), and consecutive scored days build a **streak** (+1 SP every 3 days). Press `R` to return to free mode
 
 ### ✨ Atmosphere
 
@@ -212,7 +212,7 @@ node tools/logic-test.mjs             # simulation/world-engine logic
 ```
 
 - **`tools/boot-test.mjs`** imports the actual `js/main.js` in its real declaration order inside a stubbed browser (DOM, canvas, localStorage, gamepad — no WebGL, no AudioContext) and drives it through *Start Playing*, world switching, animation frames, and pilot persistence. This is the regression test for the v8 incident where a `const` referenced above its declaration threw at module load and silently killed the play button — `node --check` passes such code, only a true import catches it. `--selftest` re-creates that exact bug and verifies the test fails on it.
-- CI also parses `main.gd` with gdtoolkit and boots the project headlessly using the official Godot 4.7.2 Linux binary, verified against its release SHA-256 and cached between runs. This is a startup smoke test, not an interactive playtest. The web tests use stubs rather than a real browser.
+- CI also parses `main.gd`, boots the project headlessly and runs `tools/godot-runtime-test.gd` with the official Godot 4.7.2 Linux binary, verified against its release SHA-256 and cached between runs. Godot and JavaScript both verify shared date-hash and seeded-world fixtures; the Godot suite also checks glider movement and XP persistence in an isolated user-data directory. This is a startup smoke test, not an interactive playtest. The web tests use stubs rather than a real browser.
 - **`tools/logic-test.mjs`** extracts the simulation core verbatim from `js/main.js` and asserts the world engine: rule masks, glider parity between Life and HighLife, Replicator cloning (12→24→48 cells every 12 gens), world-gen densities, per-world tower lifespans, crystal growth + mining, and same-seed determinism.
 
 
