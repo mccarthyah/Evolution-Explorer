@@ -775,7 +775,10 @@ func _spawn_burst(pos: Vector3, color: Color, amount: int) -> void:
 	p.position = pos
 	add_child(p)
 	p.emitting = true
-	get_tree().create_timer(1.2).timeout.connect(func() -> void: if is_instance_valid(p): p.queue_free())
+	get_tree().create_timer(1.2).timeout.connect(func() -> void:
+		if is_instance_valid(p):
+			p.queue_free()
+	)
 
 func _process(delta: float) -> void:
 	# Day/night cycle.

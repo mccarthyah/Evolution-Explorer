@@ -204,7 +204,7 @@ Evolution-Explorer/
 
 ## 🧪 Testing
 
-Two Node test suites run against the shipped web code. GitHub Actions runs both on pushes and pull requests; run them locally before pushing:
+Two Node test suites run against the shipped web code. GitHub Actions runs both and checks GDScript syntax on pushes and pull requests; run them locally before pushing:
 
 ```bash
 node tools/boot-test.mjs --selftest   # boot test (+ proves it catches the TDZ bug class)
@@ -212,7 +212,7 @@ node tools/logic-test.mjs             # simulation/world-engine logic
 ```
 
 - **`tools/boot-test.mjs`** imports the actual `js/main.js` in its real declaration order inside a stubbed browser (DOM, canvas, localStorage, gamepad — no WebGL, no AudioContext) and drives it through *Start Playing*, world switching, animation frames, and pilot persistence. This is the regression test for the v8 incident where a `const` referenced above its declaration threw at module load and silently killed the play button — `node --check` passes such code, only a true import catches it. `--selftest` re-creates that exact bug and verifies the test fails on it.
-- These tests use stubs and do not replace a browser playtest or Godot runtime tests.
+- CI also parses `main.gd` with gdtoolkit. Parsing does not replace Godot runtime tests, and the web tests use stubs rather than a real browser.
 - **`tools/logic-test.mjs`** extracts the simulation core verbatim from `js/main.js` and asserts the world engine: rule masks, glider parity between Life and HighLife, Replicator cloning (12→24→48 cells every 12 gens), world-gen densities, per-world tower lifespans, crystal growth + mining, and same-seed determinism.
 
 
